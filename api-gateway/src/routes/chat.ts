@@ -3,12 +3,16 @@
  *
  * Request lifecycle:
  *  1. Validate incoming body with zod.
- *  2. Check Redis cache — return immediately on a hit (cached: true).
- *  3. Forward the question to the AI service.
- *  4. Store the AI response in Redis for future requests.
- *  5. Persist both messages to MongoDB (non-blocking; DB errors don't fail
+ *  2. Load the bounded prior conversation from the stored session
+ *     (server-side only; failures are logged and treated as "no history" —
+ *     Issue #27).
+ *  3. Check Redis cache — return immediately on a hit (cached: true).
+ *  4. Forward the question (plus the bounded history when present) to the
+ *     AI service.
+ *  5. Store the AI response in Redis for future requests.
+ *  6. Persist both messages to MongoDB (non-blocking; DB errors don't fail
  *     the response).
- *  6. Return a structured response that includes an auto-generated (or
+ *  7. Return a structured response that includes an auto-generated (or
  *     echoed) sessionId and `cached: false`.
  */
 
@@ -23,6 +27,7 @@ import {
   type AiStream,
 } from '../services/aiStream';
 import { getCachedResponse, setCachedResponse, type CachedResponse } from '../services/cache';
+import { boundHistory, type HistoryMessage } from '../services/history';
 import { AppError } from '../middleware/errorHandler';
 import { AxiosError } from 'axios';
 import { Session } from '../models/session';
@@ -90,8 +95,11 @@ router.post('/chat', async (req: Request, res: Response, next: NextFunction): Pr
   const { question, sessionId } = parsed;
   const resolvedSessionId = sessionId ?? randomUUID();
 
-  // 2. Check Redis cache
-  const cached = await getCachedResponse(question);
+  // 2. Load the bounded prior conversation server-side (fail-open)
+  const history = sessionId ? await loadRecentHistory(sessionId, req.requestId) : [];
+
+  // 3. Check Redis cache (history-aware key when history is present)
+  const cached = await getCachedAnswer(question, history);
   if (cached !== null) {
     // Cache hit — persist the exchange and return immediately
     await persistMessages(
@@ -123,15 +131,22 @@ router.post('/chat', async (req: Request, res: Response, next: NextFunction): Pr
   // 3. Cache miss — proxy to AI service
   try {
     const upstreamStart = Date.now();
-    const aiResponse = await queryAiService({ question }, req.requestId);
+    const aiResponse = await queryAiService(
+      history.length > 0 ? { question, history } : { question },
+      req.requestId,
+    );
     const upstreamMs = Date.now() - upstreamStart;
 
     // 4. Store in Redis (fire-and-forget; errors are swallowed inside)
-    await setCachedResponse(question, {
-      answer: aiResponse.answer,
-      sources: aiResponse.sources,
-      latency_ms: aiResponse.latency_ms,
-    });
+    await cacheAnswer(
+      question,
+      {
+        answer: aiResponse.answer,
+        sources: aiResponse.sources,
+        latency_ms: aiResponse.latency_ms,
+      },
+      history,
+    );
 
     // 5. Persist messages to MongoDB (non-blocking to response)
     await persistMessages(
@@ -245,9 +260,12 @@ router.post(
     const { question, sessionId } = parsed;
     const resolvedSessionId = sessionId ?? randomUUID();
 
-    // 2. Cache hit — replay the stored answer as SSE so the client code
+    // 2. Load the bounded prior conversation server-side (fail-open)
+    const history = sessionId ? await loadRecentHistory(sessionId, req.requestId) : [];
+
+    // 3. Cache hit — replay the stored answer as SSE so the client code
     //    path is identical for cached and fresh responses.
-    const cached = await getCachedResponse(question);
+    const cached = await getCachedAnswer(question, history);
     if (cached !== null) {
       await persistMessages(
         resolvedSessionId,
@@ -282,7 +300,10 @@ router.post(
     //    is sent, so they can still become regular JSON error responses.
     let stream: AiStream;
     try {
-      stream = await openAiStream({ question }, req.requestId);
+      stream = await openAiStream(
+        history.length > 0 ? { question, history } : { question },
+        req.requestId,
+      );
     } catch (err) {
       handleStreamOpenError(err, req, res, next);
       return;
@@ -385,7 +406,7 @@ router.post(
     const latencyMs = upstreamLatencyMs ?? Date.now() - startMs;
 
     // 5. Cache + persist the completed answer (same as the non-streaming path).
-    await setCachedResponse(question, { answer, sources, latency_ms: latencyMs });
+    await cacheAnswer(question, { answer, sources, latency_ms: latencyMs }, history);
     await persistMessages(resolvedSessionId, question, answer, sources, req.requestId);
 
     logger.info('chat_completed', {
@@ -410,6 +431,58 @@ router.post(
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Load the bounded pre-request conversation for a stored session (Issue #27).
+ *
+ * Called only when the request carries a sessionId.  Messages are read
+ * server-side from MongoDB — browser-supplied history is never trusted — and
+ * bounded by {@link boundHistory}.  Any failure (DB outage, malformed
+ * document) is logged and treated as "no history" so a lookup problem can
+ * never fail the chat response (fail-open, mirroring `persistMessages`).
+ */
+async function loadRecentHistory(sessionId: string, requestId: string): Promise<HistoryMessage[]> {
+  try {
+    const session = await Session.findOne({ sessionId });
+    const messages = session?.messages ?? [];
+    return boundHistory(
+      messages.map((message) => ({ role: message.role, content: message.content })),
+    );
+  } catch (err) {
+    logger.warn('session_history_load_failed', {
+      request_id: requestId,
+      error: err,
+      session_id: sessionId,
+    });
+    return [];
+  }
+}
+
+/**
+ * Cache lookup that preserves the legacy call shape for stateless requests:
+ * requests without history resolve to exactly the pre-#27 key and arguments.
+ */
+function getCachedAnswer(
+  question: string,
+  history: HistoryMessage[],
+): Promise<CachedResponse | null> {
+  return history.length === 0 ? getCachedResponse(question) : getCachedResponse(question, history);
+}
+
+/**
+ * Cache store that preserves the legacy call shape for stateless requests
+ * (two-argument `setCachedResponse`); history-aware requests pass the bounded
+ * conversation after the TTL parameter.
+ */
+function cacheAnswer(
+  question: string,
+  payload: CachedResponse,
+  history: HistoryMessage[],
+): Promise<void> {
+  return history.length === 0
+    ? setCachedResponse(question, payload)
+    : setCachedResponse(question, payload, undefined, history);
+}
 
 /**
  * Upsert the session document by appending the user message and the

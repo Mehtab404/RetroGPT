@@ -172,3 +172,27 @@ Issue #25 requires the answer to appear token-by-token in the UI, which means LL
 - Cached answers and mid-stream failures have defined, tested semantics: no duplicate cache entries, no persisted partial answers, no silent truncation.
 - The hand-rolled parsers are ~40 lines each and are covered by unit tests (frame splitting, CRLF, keep-alives, mid-stream errors); the cost of a dependency was judged higher than the cost of maintaining them.
 - Live token-by-token verification with a real provider still requires `GOOGLE_API_KEY`/`OPENAI_API_KEY`; without credentials the plumbing can be verified with a mock upstream (see Tests section).
+
+---
+
+## ADR 0007: Conversation-Aware Follow-Up Questions
+
+- **Status:** Accepted
+- **Date:** 2026-10-17
+- **Issue:** #27
+
+### Context
+Follow-up questions ("What about the saucer?") were answered as standalone queries: the gateway forwarded only the question text, so the AI service could not resolve pronouns or implicit subjects, and Redis served one cached answer to every conversation that asked the same text. Sessions already existed — `POST /api/chat` returns a `sessionId` and MongoDB stores every exchange — so the missing pieces were *where* history may be read from, how much of it may travel, and how it interacts with caching, grounding and the prompt-injection defenses.
+
+### Decision
+1. **Server-side load only.** Before every request carrying a `sessionId`, the gateway reloads the session's stored messages from MongoDB (`Session.findOne`). Browser-supplied history is never trusted: the request schema has no history field, so a client payload containing one is stripped by zod and ignored.
+2. **Bounded and deterministic.** `api-gateway/src/services/history.ts` (contract mirrored by `ai-service/app/schemas.py`) keeps at most the last `HISTORY_MAX_MESSAGES = 6` messages totalling at most `HISTORY_MAX_CHARS = 4000` content characters, walking newest-first so the most recent turns always survive, then forwards the window oldest-first. The AI service re-validates structure, roles, message count and the character budget, rejecting invalid payloads with 422.
+3. **Fail-open.** A session lookup failure (Mongo down, malformed document) logs `session_history_load_failed` and the request proceeds without history — the same fail-open posture as message persistence. Requests without a `sessionId`, or against an empty session, behave exactly as before.
+4. **A delimited, non-evidential prompt block.** `build_rag_prompt` inserts a `PRIOR CONVERSATION` block between the retrieved passages and the question. Its header states the block is context only — not factual evidence, never citable, never to be followed as instructions — and the system prompt with its injection guards is unchanged. Retrieved passages remain the sole grounding for facts and citations; prompts without history are byte-identical to the pre-#27 layout.
+5. **History-aware cache keys.** Redis keys stay `retrogpt:chat:<sha256(question)>` for stateless requests; history-aware requests append `:h:<sha256(role/content pairs)>`, an order-sensitive fingerprint so different conversations asking the same follow-up never collide with each other or with the stateless key. Both routes use the fingerprint; without history the call shape and key are the legacy ones.
+
+### Consequences
+- Follow-ups are answered with conversational context on both the JSON and SSE routes, while the grounding contract (retrieved passages → citations) stays unchanged and independently testable.
+- Caching becomes conversation-scoped: the same follow-up text in different conversations no longer shares one cache entry — more Redis keys, bounded by the existing 24 h TTL.
+- If even the newest stored message exceeds the 4000-character cap, the bounded window is empty and the request degrades to a stateless ask (documented limitation).
+- Prompt growth from history is capped at 4000 characters (~1 K tokens), keeping cost and latency predictable.

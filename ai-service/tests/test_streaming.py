@@ -480,3 +480,46 @@ class TestQueryStreamEndpoint:
         event = next(p for p in handler.payloads if p["event"] == "query")
         assert event["streamed"] is True
         assert event["chunk_count"] == 2
+
+    def test_history_is_rendered_into_the_streamed_prompt(self) -> None:
+        search_result = _make_search_result(chunk_id="asteroids_p4_c1")
+        captured: dict[str, str] = {}
+
+        llm = MagicMock()
+
+        async def stream(prompt: str):
+            captured["prompt"] = prompt
+            yield "Saucers are worth 1000 points [1]."
+
+        llm.generate_stream = stream
+        llm.generate = AsyncMock(return_value="Saucers are worth 1000 points [1].")
+
+        patches = _patch_deps([search_result], llm)
+        try:
+            response = client.post(
+                "/query/stream",
+                json={
+                    "question": "What about the saucer?",
+                    "history": [
+                        {"role": "user", "content": "How do you score in Asteroids?"},
+                        {"role": "assistant", "content": "Shoot asteroids [1]."},
+                    ],
+                },
+            )
+        finally:
+            for patcher in patches[:3]:
+                patcher.stop()
+
+        assert response.status_code == 200
+        assert "PRIOR CONVERSATION" in captured["prompt"]
+        assert "USER: How do you score in Asteroids?" in captured["prompt"]
+        assert "ASSISTANT: Shoot asteroids [1]." in captured["prompt"]
+        assert "[1] (source: asteroids_p4_c1)" in captured["prompt"]
+
+    def test_invalid_history_returns_422_before_streaming(self) -> None:
+        response = client.post(
+            "/query/stream",
+            json={"question": "q?", "history": [{"role": "tool", "content": "x"}]},
+        )
+        assert response.status_code == 422
+        assert response.headers["content-type"].startswith("application/json")

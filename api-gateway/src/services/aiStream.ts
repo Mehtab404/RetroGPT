@@ -17,6 +17,7 @@
 
 import type { ReadableStream as WebReadableStream } from 'stream/web';
 import { config } from '../config';
+import type { HistoryMessage } from './history';
 import { createSseParser } from '../utils/sse';
 
 // ---------------------------------------------------------------------------
@@ -27,6 +28,8 @@ export interface AiQueryRequest {
   question: string;
   top_k?: number;
   game_slug?: string | null;
+  /** Bounded prior conversation for follow-up questions (Issue #27). */
+  history?: HistoryMessage[];
 }
 
 export interface AiStreamEvent {

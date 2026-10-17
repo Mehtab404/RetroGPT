@@ -345,4 +345,125 @@ describe('POST /api/chat/stream', () => {
     expect(res.body.error.code).toBe('VALIDATION_ERROR');
     expect(aiStream.openAiStream).not.toHaveBeenCalled();
   });
+
+  // -------------------------------------------------------------------------
+  // Conversation history (Issue #27)
+  // -------------------------------------------------------------------------
+
+  describe('conversation history', () => {
+    const SESSION_ID = '550e8400-e29b-41d4-a716-446655440000';
+
+    /** Build a stored-session message fixture. */
+    function storedMessage(role: 'user' | 'assistant', content: string) {
+      return { role, content, createdAt: new Date() };
+    }
+
+    it('loads the stored session history and passes it upstream', async () => {
+      (Session.findOne as unknown as jest.Mock).mockResolvedValue({
+        messages: [
+          storedMessage('user', 'How do you score in Asteroids?'),
+          storedMessage('assistant', 'Destroy asteroids for points [1].'),
+        ],
+      });
+      openSpy = jest.spyOn(aiStream, 'openAiStream').mockResolvedValue(
+        makeStream([
+          ['meta', { sources: [] }],
+          ['token', { text: 'Saucer.' }],
+          ['done', { latency_ms: 10 }],
+        ]),
+      );
+
+      await request(app)
+        .post('/api/chat/stream')
+        .set('x-api-key', API_KEY)
+        .send({ question: 'What about the saucer?', sessionId: SESSION_ID });
+
+      expect(Session.findOne).toHaveBeenCalledWith({ sessionId: SESSION_ID });
+      expect(openSpy).toHaveBeenCalledWith(
+        {
+          question: 'What about the saucer?',
+          history: [
+            { role: 'user', content: 'How do you score in Asteroids?' },
+            { role: 'assistant', content: 'Destroy asteroids for points [1].' },
+          ],
+        },
+        expect.any(String),
+      );
+    });
+
+    it('caches the completed stream under a history-aware key', async () => {
+      (Session.findOne as unknown as jest.Mock).mockResolvedValue({
+        messages: [storedMessage('user', 'How do you score in Asteroids?')],
+      });
+      openSpy = jest.spyOn(aiStream, 'openAiStream').mockResolvedValue(
+        makeStream([
+          ['meta', { sources: SOURCES }],
+          ['token', { text: 'Answer [1].' }],
+          ['done', { latency_ms: 300 }],
+        ]),
+      );
+
+      const question = 'What about the saucer?';
+      await request(app)
+        .post('/api/chat/stream')
+        .set('x-api-key', API_KEY)
+        .send({ question, sessionId: SESSION_ID });
+
+      const expectedHistory = [{ role: 'user', content: 'How do you score in Asteroids?' }];
+      expect(cache.getCachedResponse).toHaveBeenCalledWith(question, expectedHistory);
+      expect(cache.setCachedResponse).toHaveBeenCalledWith(
+        question,
+        { answer: 'Answer [1].', sources: SOURCES, latency_ms: 300 },
+        undefined,
+        expectedHistory,
+      );
+    });
+
+    it('fails open without history when the session lookup throws', async () => {
+      (Session.findOne as unknown as jest.Mock).mockRejectedValue(new Error('mongo down'));
+      openSpy = jest.spyOn(aiStream, 'openAiStream').mockResolvedValue(
+        makeStream([
+          ['meta', { sources: [] }],
+          ['token', { text: 'Answer.' }],
+          ['done', { latency_ms: 10 }],
+        ]),
+      );
+
+      const res = await request(app)
+        .post('/api/chat/stream')
+        .set('x-api-key', API_KEY)
+        .send({ question: 'What about the saucer?', sessionId: SESSION_ID });
+
+      expect(res.status).toBe(200);
+      expect(openSpy).toHaveBeenCalledWith(
+        { question: 'What about the saucer?' },
+        expect.any(String),
+      );
+    });
+
+    it('replays a history-aware cache hit as SSE without calling the AI service', async () => {
+      (Session.findOne as unknown as jest.Mock).mockResolvedValue({
+        messages: [storedMessage('user', 'How do you score in Asteroids?')],
+      });
+      jest.spyOn(aiStream, 'openAiStream');
+      (cache.getCachedResponse as jest.Mock).mockResolvedValue({
+        answer: 'Cached follow-up [1].',
+        sources: SOURCES,
+        latency_ms: 12,
+      });
+
+      const res = await request(app)
+        .post('/api/chat/stream')
+        .set('x-api-key', API_KEY)
+        .send({ question: 'What about the saucer?', sessionId: SESSION_ID });
+
+      const events = parseSseBody(res.text);
+      expect(events.map(([name]) => name)).toEqual(['meta', 'token', 'done']);
+      expect(cache.getCachedResponse).toHaveBeenCalledWith('What about the saucer?', [
+        { role: 'user', content: 'How do you score in Asteroids?' },
+      ]);
+      expect(aiStream.openAiStream).not.toHaveBeenCalled();
+      expect(Session.findOneAndUpdate).toHaveBeenCalledTimes(1);
+    });
+  });
 });

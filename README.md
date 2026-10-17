@@ -436,6 +436,14 @@ Response:
 }
 ```
 
+Sessions are also the source of conversational context: `POST /api/chat` and
+`POST /api/chat/stream` requests that carry a `sessionId` reload a bounded
+window of the stored messages (the last 6 messages, at most 4000 characters
+total) **server-side** so follow-up questions are interpreted against the real
+conversation. History is context only — answers stay grounded in the retrieved
+passages — and any history sent by a browser/client is ignored. Requests
+without a `sessionId` behave exactly as before.
+
 ---
 
 ## 🤝 Contributing

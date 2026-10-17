@@ -10,6 +10,7 @@
 
 import axios, { AxiosError, AxiosInstance } from 'axios';
 import { config } from '../config';
+import type { HistoryMessage } from './history';
 
 // ---------------------------------------------------------------------------
 // Wire-format types (mirrors ai-service/app/schemas.py)
@@ -19,6 +20,8 @@ export interface AiQueryRequest {
   question: string;
   top_k?: number;
   game_slug?: string | null;
+  /** Bounded prior conversation for follow-up questions (Issue #27). */
+  history?: HistoryMessage[];
 }
 
 export interface SourceDoc {
