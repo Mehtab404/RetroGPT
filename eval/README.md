@@ -8,6 +8,7 @@ Measures RetroGPT's retrieval and answer quality against a labeled dataset.
 |---|---|
 | `dataset.jsonl` | 70 labeled questions (Issue #18) |
 | `run_eval.py` | Stdlib-only evaluation harness (Issue #19) |
+| `retrieval_eval.py` | In-process retrieval evaluation: chunking sweeps + CI regression guard (Issues #22/#23) |
 | `results/` | Saved runs — `<date>-<label>.json` + `.md` |
 | `requirements-eval.txt` | Optional RAGAS dependencies (`--with-ragas`) |
 | `tests/` | Unit tests for the harness (no services needed) |
@@ -66,6 +67,51 @@ and a real `GOOGLE_API_KEY`/`OPENAI_API_KEY` in the AI service for LLM answers.
 | `--quiet` | Suppress per-question progress |
 
 Exit codes: `0` ok · `1` quality guard failed · `2` fatal (bad dataset, service down).
+
+## Retrieval-only evaluation (`retrieval_eval.py`, #22/#23)
+
+`run_eval.py` measures the *service* (HTTP + generated answers) and needs API
+keys.  `retrieval_eval.py` instead imports the ai-service code directly and
+scores the **real retrieval stack** (chunking → BM25 → hybrid search →
+optional re-ranking) against a scratch Qdrant collection — no LLM, no API
+key required.  Answers are never generated, so refusal accuracy/RAGAS are
+`n/a` by design.
+
+Run it inside the ai-service container (the only place with the app + deps):
+
+```powershell
+# Quick single-configuration run (10 questions)
+docker compose exec ai-service python /eval/retrieval_eval.py --limit 10
+
+# Chunking sweep (#22): sizes x overlaps, full dataset
+docker compose exec ai-service python /eval/retrieval_eval.py `
+  --sweep-sizes 400,800,1200 --sweep-overlaps 0,100,120 `
+  --embedder fastembed --fastembed-cache /data/fastembed_cache --no-rerank `
+  --label chunking-sweep
+
+# CI regression guard (#23): fail if Hit Rate drops > 5 points vs. baseline
+docker compose exec ai-service python /eval/retrieval_eval.py `
+  --limit 10 --embedder hashing --no-rerank `
+  --baseline /eval/baselines/ci-offline.json
+```
+
+Embedders:
+
+| `--embedder` | Notes |
+|---|---|
+| `hashing` (default) | Deterministic feature hashing, fully offline — for CI guards, not quality claims |
+| `fastembed` | Local ONNX model (`BAAI/bge-small-en-v1.5` by default); `--fastembed-cache` persists the download |
+| `gemini` / `openai` | Hosted embeddings; needs `GOOGLE_API_KEY` / `OPENAI_API_KEY` in the container |
+
+Notes:
+
+- The scratch collection (`--collection`, default `retrogpt_eval`) is deleted
+  and re-created on every configuration run; it never touches `retro_games`.
+- Re-ranking follows `RERANK_ENABLED` unless `--rerank`/`--no-rerank` is
+  passed; sweeps usually pass `--no-rerank` so chunking is measured on its own.
+- Guards (`--baseline`, `--min-hit-rate`, `--max-hit-rate-drop`) apply to
+  single-configuration runs; baseline JSON is the file written by any earlier
+  run of `retrieval_eval.py` or `run_eval.py`.
 
 ## Metrics
 

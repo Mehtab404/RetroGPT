@@ -737,6 +737,45 @@ class TestMain:
         assert "skipped" in payload["ragas_note"]
 
 
+class TestQualityGuards:
+    def test_passes_without_guards(self) -> None:
+        assert run_eval.check_quality_guards({"hit_rate": 0.5}) == []
+
+    def test_min_hit_rate_failure_message(self) -> None:
+        failures = run_eval.check_quality_guards({"hit_rate": 0.4}, min_hit_rate=0.8)
+        assert len(failures) == 1
+        assert "below the required 0.800" in failures[0]
+
+    def test_min_hit_rate_met_passes(self) -> None:
+        assert run_eval.check_quality_guards({"hit_rate": 0.9}, min_hit_rate=0.8) == []
+
+    def test_baseline_drop_failure(self, tmp_path: Path) -> None:
+        baseline = tmp_path / "baseline.json"
+        baseline.write_text(json.dumps({"metrics": {"hit_rate": 0.9}}), encoding="utf-8")
+        failures = run_eval.check_quality_guards(
+            {"hit_rate": 0.8}, baseline_path=baseline, max_hit_rate_drop=0.05
+        )
+        assert len(failures) == 1
+        assert "dropped 0.100" in failures[0]
+
+    def test_baseline_within_tolerance_passes(self, tmp_path: Path) -> None:
+        baseline = tmp_path / "baseline.json"
+        baseline.write_text(json.dumps({"metrics": {"hit_rate": 0.83}}), encoding="utf-8")
+        assert run_eval.check_quality_guards({"hit_rate": 0.8}, baseline_path=baseline) == []
+
+    def test_unreadable_baseline_is_skipped(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        failures = run_eval.check_quality_guards(
+            {"hit_rate": 0.1}, baseline_path=tmp_path / "missing.json"
+        )
+        assert failures == []
+        assert "cannot read baseline" in capsys.readouterr().err
+
+    def test_missing_hit_rate_is_skipped(self) -> None:
+        assert run_eval.check_quality_guards({"hit_rate": None}, min_hit_rate=0.8) == []
+
+
 class TestApiClient:
     def test_url_composition(self) -> None:
         client = run_eval.ApiClient(base_url="http://example.com:8000/", endpoint="query")
