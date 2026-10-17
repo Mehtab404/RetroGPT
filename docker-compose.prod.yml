@@ -196,7 +196,10 @@ services:
       - frontend
       - api-gateway
     healthcheck:
-      test: ['CMD-SHELL', 'wget -q --no-check-certificate -O /dev/null http://localhost/ || exit 1']
+      # 127.0.0.1, not localhost: see docker-compose.yml (Alpine wget vs ::1).
+      # --no-check-certificate: the HTTPS template redirects to a certificate
+      # issued for ${DOMAIN}, not for the loopback address.
+      test: ['CMD-SHELL', 'wget -q --no-check-certificate -O /dev/null http://127.0.0.1/ || exit 1']
       interval: 30s
       timeout: 5s
       retries: 3

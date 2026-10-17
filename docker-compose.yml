@@ -182,7 +182,10 @@ services:
       - frontend
       - api-gateway
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost/"]
+      # 127.0.0.1, not localhost: inside Alpine, localhost resolves to IPv6
+      # ::1 first and busybox wget does not fall back, while nginx listens on
+      # IPv4 only — so the probe would always fail.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
       interval: 30s
       timeout: 5s
       retries: 3
