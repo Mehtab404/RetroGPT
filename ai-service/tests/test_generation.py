@@ -103,6 +103,17 @@ def _make_search_result(
     )
 
 
+@pytest.fixture(autouse=True)
+def _dense_only_retrieval(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Force /query onto the deterministic dense-only path.
+
+    Without this, hybrid_search() would try to load BM25 statistics from
+    ``settings.bm25_stats_path``, which may or may not exist on the test
+    host (created by a previous pipeline run).
+    """
+    monkeypatch.setattr("app.retrieval.hybrid.get_bm25_encoder", lambda path=None: None)
+
+
 # ---------------------------------------------------------------------------
 # LLMProvider ABC
 # ---------------------------------------------------------------------------

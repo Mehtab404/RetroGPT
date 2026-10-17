@@ -1,6 +1,6 @@
 """Ingestion pipeline for the RetroGPT RAG system.
 
-Orchestrates the full load → chunk → embed → upsert workflow.
+Orchestrates the full load → chunk → BM25 → embed → upsert workflow.
 
 Pipeline stages
 ---------------
@@ -9,10 +9,17 @@ Pipeline stages
 2. **Chunk** – :class:`~app.ingestion.chunker.RecursiveCharacterTextSplitter`
    splits each document into overlapping :class:`~app.ingestion.chunker.Chunk`
    objects that fit within the embedding model's context window.
-3. **Embed** – :class:`~app.ingestion.embeddings.EmbeddingProvider` converts
+3. **BM25 (hybrid search, Issue #20)** – all chunk texts in the run are
+   fitted into a :class:`~app.retrieval.bm25.Bm25Encoder` which is attached
+   to the vector store (so upserts include sparse vectors) and persisted to
+   ``settings.bm25_stats_path`` for the query path.  The run is therefore
+   two-phase: *all* files are loaded and chunked before any file is
+   embedded, so the BM25 corpus covers the whole run.  Skipped when hybrid
+   search is disabled or the collection has no sparse-vector config.
+4. **Embed** – :class:`~app.ingestion.embeddings.EmbeddingProvider` converts
    each chunk's text to a dense float vector (batched for efficiency).
-4. **Upsert** – :class:`~app.retrieval.vector_store.QdrantVectorStore` stores
-   ``(id, vector, payload)`` tuples in Qdrant.
+5. **Upsert** – :class:`~app.retrieval.vector_store.QdrantVectorStore` stores
+   ``(id, vector(s), payload)`` tuples in Qdrant.
 
 The pipeline is **idempotent**: re-running with the same files will overwrite
 existing Qdrant points with the same chunk IDs, producing no duplicates.
@@ -26,13 +33,16 @@ Typical usage::
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from app.config import settings
 from app.ingestion.chunker import Chunk, RecursiveCharacterTextSplitter
 from app.ingestion.embeddings import EmbeddingProvider, get_embedding_provider
 from app.ingestion.loaders import Document, get_loader_for
+from app.retrieval.bm25 import Bm25Encoder
 from app.retrieval.vector_store import QdrantVectorStore
 
 logger = logging.getLogger(__name__)
@@ -140,7 +150,9 @@ class IngestionPipeline:
         files = self._discover_files(source)
         logger.info("Discovered %d file(s) under '%s'.", len(files), source)
 
-        # Load, chunk, embed, and upsert file by file.
+        # Phase 1: load + chunk every file.  Two-phase processing lets the
+        # BM25 statistics cover the *entire* run before anything is upserted.
+        prepared: list[tuple[Path, int, list[Chunk]]] = []
         for file_path in sorted(files):
             try:
                 docs = self._load(file_path)
@@ -152,6 +164,17 @@ class IngestionPipeline:
                     result.skipped_files.append(str(file_path))
                     continue
 
+                prepared.append((file_path, len(docs), chunks))
+            except Exception as exc:
+                logger.error("Failed to process '%s': %s", file_path, exc)
+                result.errors[str(file_path)] = str(exc)
+
+        # Phase 2: fit BM25 over all chunks (hybrid search, best-effort).
+        await self._prepare_bm25([chunk for _, _, chunks in prepared for chunk in chunks])
+
+        # Phase 3: embed + upsert file by file.
+        for file_path, doc_count, chunks in prepared:
+            try:
                 vectors = await self._embed(chunks)
                 upserted = await self._store.upsert(chunks, vectors)
                 result.total_chunks += len(chunks)
@@ -160,7 +183,7 @@ class IngestionPipeline:
                 logger.info(
                     "Processed '%s': %d doc(s) → %d chunk(s) → %d upserted.",
                     file_path.name,
-                    len(docs),
+                    doc_count,
                     len(chunks),
                     upserted,
                 )
@@ -202,6 +225,8 @@ class IngestionPipeline:
         if not chunks:
             logger.warning("No chunks produced from provided documents.")
             return result
+
+        await self._prepare_bm25(chunks)
 
         vectors = await self._embed(chunks)
         upserted = await self._store.upsert(chunks, vectors)
@@ -282,3 +307,63 @@ class IngestionPipeline:
         """
         texts = [chunk.content for chunk in chunks]
         return await self._embedder.embed_documents(texts)
+
+    # ------------------------------------------------------------------
+    # BM25 / hybrid-search preparation
+    # ------------------------------------------------------------------
+
+    async def _prepare_bm25(self, chunks: list[Chunk]) -> None:
+        """Fit, attach, and persist the BM25 encoder for hybrid retrieval.
+
+        Skipped when hybrid search is disabled, no chunks were produced, or
+        the underlying collection has no sparse-vector config (legacy
+        dense-only collection).  Attaching the encoder makes
+        :meth:`~app.retrieval.vector_store.QdrantVectorStore.upsert` write
+        sparse vectors alongside the dense ones.
+
+        Args:
+            chunks: All chunks produced by this run (the BM25 corpus).
+        """
+        if not settings.hybrid_search_enabled or not chunks:
+            return
+
+        try:
+            supports_sparse = await asyncio.to_thread(self._store.supports_sparse)
+        except Exception as exc:  # defensive: never fail ingestion over BM25
+            logger.warning("Could not check sparse-vector support; skipping BM25: %s", exc)
+            return
+
+        if not supports_sparse:
+            logger.info(
+                "Collection '%s' does not support sparse vectors; "
+                "BM25 hybrid search stays disabled.",
+                getattr(self._store, "collection", "?"),
+            )
+            return
+
+        encoder = Bm25Encoder().fit([chunk.content for chunk in chunks])
+        self._store.set_bm25_encoder(encoder)
+        self._persist_bm25_stats(encoder)
+        logger.info(
+            "BM25 fitted over %d chunk(s) (%d terms).",
+            encoder.n_docs,
+            encoder.vocabulary_size,
+        )
+
+    def _persist_bm25_stats(self, encoder: Bm25Encoder) -> None:
+        """Persist BM25 statistics to ``settings.bm25_stats_path``.
+
+        Best-effort: an unwritable path (e.g. read-only CI checkout) only
+        logs a warning — the run itself already succeeded.
+        """
+        path = Path(settings.bm25_stats_path)
+        try:
+            encoder.save(path)
+            logger.info("Persisted BM25 stats to '%s'.", path)
+        except OSError as exc:
+            logger.warning(
+                "Could not persist BM25 stats to '%s' (%s); "
+                "hybrid search will fall back to dense until stats are written.",
+                path,
+                exc,
+            )
