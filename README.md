@@ -277,6 +277,21 @@ Hit Rate drops more than 5 points below the committed baseline — no API keys
 required. See [`eval/README.md`](./eval/README.md) for the dataset schema,
 metric definitions, flags, and CI details.
 
+### Load Testing
+
+[`eval/loadtest/`](./eval/loadtest) contains a [k6](https://k6.io) harness that
+drives `POST /api/chat` at 10 and 50 concurrent users, cached and uncached:
+
+| Concurrent users | Uncached p50 / p95 | Cached p50 / p95 |
+|---|---|---|
+| 10 | _TBD_ | _TBD_ |
+| 50 | _TBD_ | _TBD_ |
+
+> Real numbers need a credentialed stack (`GOOGLE_API_KEY` for generation) and
+> a raised gateway rate limit; the cached pass replays the 70-question eval
+> dataset and asserts `cached: true`. Runbook and caveats:
+> [`eval/loadtest/README.md`](./eval/loadtest/README.md).
+
 ---
 
 ## 🚢 Deployment
@@ -487,7 +502,7 @@ This is a portfolio/learning project. Contributions are welcome!
 - [x] M3: Frontend UI
 - [x] M4: Evaluation suite and quality improvements
 - [ ] M5: Production deployment (AWS + CI/CD) — structured logging, production compose and the CD workflow (`deploy.yml`) done; public URL pending AWS credentials
-- [ ] M6: Polish (load tests, documentation) — streaming done (#25)
+- [ ] M6: Polish (load tests, documentation) — streaming done (#25); k6 load-test harness ready (numbers pending GOOGLE_API_KEY)
 
 See [GitHub Issues](https://github.com/Mehtab404/RetroGPT/issues) for detailed task breakdown.
 

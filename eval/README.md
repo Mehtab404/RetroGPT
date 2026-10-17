@@ -13,6 +13,7 @@ Measures RetroGPT's retrieval and answer quality against a labeled dataset.
 | `results/` | Saved runs — `<date>-<label>.json` + `.md` |
 | `requirements-eval.txt` | Optional RAGAS dependencies (`--with-ragas`) |
 | `tests/` | Unit tests for the harness (no services needed) |
+| `loadtest/` | k6 load-test harness: cached vs. uncached p50/p95 at 10/50 concurrent users (Issue #33) |
 
 ## Dataset schema
 
@@ -163,3 +164,13 @@ Markdown report is uploaded as the `retrieval-eval-report` CI artifact.
 The credentialed end-to-end eval (`run_eval.py` with Gemini/OpenAI) remains
 the source of truth for answer-quality metrics; the offline guard only
 protects retrieval from regressions.
+
+## Load testing (`loadtest/`, #33)
+
+[`loadtest/chat.js`](./loadtest/chat.js) is a k6 script that drives
+`POST /api/chat` at 10 and 50 concurrent users, cached and uncached, against
+the running compose stack (Nginx → gateway → Redis/AI service). Uncached runs
+need a provider key (they reach the LLM); cached runs replay a warmed cache
+and work without one. The full runbook — rate-limit raise, cache flush,
+reading p50/p95, caveats — lives in
+[`loadtest/README.md`](./loadtest/README.md).
