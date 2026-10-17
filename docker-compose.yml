@@ -92,6 +92,7 @@ services:
       - RERANK_ENABLED=${RERANK_ENABLED:-true}
       - RERANK_MODEL=${RERANK_MODEL:-Xenova/ms-marco-MiniLM-L-6-v2}
       - RERANK_CACHE_DIR=${RERANK_CACHE_DIR:-/data/fastembed_cache}
+      - AGENT_DEFAULT_MAX_STEPS=${AGENT_DEFAULT_MAX_STEPS:-3}
       - LOG_LEVEL=${LOG_LEVEL:-info}
     depends_on:
       qdrant:

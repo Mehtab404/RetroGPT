@@ -1,0 +1,10 @@
+{"id": "agent-01", "question": "How many points is a large asteroid worth in Asteroids?", "expected_calls": [{"tool": "search_game_docs", "args": {"game": "asteroids"}}]}
+{"id": "agent-02", "question": "What enemies can the player encounter in Centipede?", "expected_calls": [{"tool": "search_game_docs", "args": {"game": "centipede"}}]}
+{"id": "agent-03", "question": "How does the player earn points in Breakout?", "expected_calls": [{"tool": "search_game_docs", "args": {"game": "breakout"}}]}
+{"id": "agent-04", "question": "What happens when all of the player's missile bases are destroyed in Missile Command?", "expected_calls": [{"tool": "search_game_docs", "args": {"game": "missile_command"}}]}
+{"id": "agent-05", "question": "How does a player clear a wave in Space Invaders?", "expected_calls": [{"tool": "search_game_docs", "args": {"game": "space_invaders"}}]}
+{"id": "agent-06", "question": "Compare the scoring systems in Asteroids and Breakout.", "expected_calls": [{"tool": "compare_games", "args": {"game_a": "asteroids", "game_b": "breakout"}}, {"tool": "compare_games", "args": {"game_a": "breakout", "game_b": "asteroids"}}]}
+{"id": "agent-07", "question": "Which game is harder to survive, Pac-Man or Centipede?", "expected_calls": [{"tool": "compare_games", "args": {"game_a": "pacman", "game_b": "centipede"}}, {"tool": "compare_games", "args": {"game_a": "centipede", "game_b": "pacman"}}]}
+{"id": "agent-08", "question": "Compare the controls of Missile Command and Space Invaders.", "expected_calls": [{"tool": "compare_games", "args": {"game_a": "missile_command", "game_b": "space_invaders"}}, {"tool": "compare_games", "args": {"game_a": "space_invaders", "game_b": "missile_command"}}]}
+{"id": "agent-09", "question": "Which games in the knowledge base were released in 1980?", "expected_calls": [{"tool": "list_games_by_year", "args": {"year": 1980}}]}
+{"id": "agent-10", "question": "What games were released in 1976?", "expected_calls": [{"tool": "list_games_by_year", "args": {"year": 1976}}]}

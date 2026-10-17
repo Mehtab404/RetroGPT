@@ -1,11 +1,14 @@
 """Pydantic request and response models for the RetroGPT AI service.
 
-Defines the wire-format schemas used by the ``POST /query`` endpoint:
+Defines the wire-format schemas used by the ``POST /query`` and
+``POST /agent`` endpoints:
 
 * :class:`QueryRequest`  — incoming query from the API gateway.
 * :class:`HistoryMessage` — one prior conversation turn (Issue #27).
 * :class:`SourceDoc`     — a single retrieved source document / passage.
 * :class:`QueryResponse` — the generated answer with sources and metadata.
+* :class:`AgentRequest` / :class:`AgentResponse` / :class:`AgentToolCall`
+  — native tool-calling agent mode (Issue #35, backlog #30).
 
 All models use strict validation and forbid extra fields to catch
 integration errors early.
@@ -13,7 +16,7 @@ integration errors early.
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -200,6 +203,114 @@ class QueryResponse(BaseModel):
         list[SourceDoc],
         Field(default_factory=list, description="Retrieved source documents."),
     ] = Field(default_factory=list)
+    latency_ms: Annotated[
+        float,
+        Field(ge=0.0, description="Total end-to-end latency in milliseconds."),
+    ]
+    cached: Annotated[
+        bool,
+        Field(
+            default=False,
+            description="Whether this response was served from cache.",
+        ),
+    ] = False
+
+
+# ---------------------------------------------------------------------------
+# Agent mode (Issue #35 / backlog #30)
+# ---------------------------------------------------------------------------
+
+#: Hard ceiling for the agent tool-calling loop (schema-level guard).
+AGENT_MAX_STEPS_LIMIT: int = 6
+
+
+class AgentToolCall(BaseModel):
+    """One tool invocation made by the agent, echoed for transparency.
+
+    Attributes:
+        name:      Registered tool name (e.g. ``"compare_games"``).
+        arguments: Parsed arguments the model supplied for the call.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    name: Annotated[
+        str,
+        Field(description="Registered tool name."),
+    ]
+    arguments: Annotated[
+        dict[str, Any],
+        Field(
+            default_factory=dict,
+            description="Arguments the model supplied for the call.",
+        ),
+    ] = Field(default_factory=dict)
+
+
+class AgentRequest(BaseModel):
+    """Request body for ``POST /agent`` (Issue #35).
+
+    Attributes:
+        question:  The user's question about a classic video game.
+                   Must be between 1 and 1000 characters.
+        max_steps: Optional cap on model turns (1–6).  Defaults to
+                   ``settings.agent_default_max_steps`` when omitted.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    question: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=1000,
+            description="The user's question about a classic video game.",
+            examples=["Compare the scoring in Asteroids and Breakout."],
+        ),
+    ]
+    max_steps: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=1,
+            le=AGENT_MAX_STEPS_LIMIT,
+            description=f"Maximum model turns (1–{AGENT_MAX_STEPS_LIMIT}).",
+        ),
+    ] = None
+
+
+class AgentResponse(BaseModel):
+    """Response body for ``POST /agent`` (Issue #35).
+
+    Attributes:
+        answer:     Final agent answer with inline ``[N]`` citations.
+        sources:    Evidence passages collected by tool calls (deduplicated
+                    in first-seen order).
+        tools_used: Tool invocations in call order (first occurrence).
+        steps:      Number of model turns taken.
+        latency_ms: Total end-to-end latency in milliseconds.
+        cached:     Always ``False`` at this service layer (agent responses
+                    are not cached).
+    """
+
+    model_config = {"extra": "forbid"}
+
+    answer: Annotated[
+        str,
+        Field(description="Final agent answer with inline citations."),
+    ]
+    sources: Annotated[
+        list[SourceDoc],
+        Field(default_factory=list, description="Evidence collected via tools."),
+    ] = Field(default_factory=list)
+    tools_used: Annotated[
+        list[AgentToolCall],
+        Field(default_factory=list, description="Tool invocations in call order."),
+    ] = Field(default_factory=list)
+    steps: Annotated[
+        int,
+        Field(ge=0, description="Number of model turns taken."),
+    ]
     latency_ms: Annotated[
         float,
         Field(ge=0.0, description="Total end-to-end latency in milliseconds."),

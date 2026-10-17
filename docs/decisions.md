@@ -221,3 +221,29 @@ Backlog item #28 requires p50/p95 latency for cached vs. uncached `/api/chat` at
 - Uncached p95 interpolates 70 samples per flush and is LLM-bound (provider latency dominates), both stated in the README to prevent over-reading.
 - The warm path is verifiable without credentials: seeding one Redis key with a valid `CachedResponse` exercises the full cached flow (`cached: true`, thresholds green); full cold numbers remain pending a provider key.
 - Streaming latency (time-to-first-token on `/api/chat/stream`) is explicitly out of scope and left as future work.
+
+---
+
+## ADR 0009: Agent Mode — Native Tool Calling on the Existing Provider Layer
+
+- **Status:** Accepted
+- **Date:** 2026-10-18
+- **Issue:** #35 (backlog #30)
+
+### Context
+Backlog item #30 (stretch) asks for an *agent mode*: the model should decide what to retrieve instead of always running one fixed RAG pass, using tools such as search, cross-game comparison and release-year lookup. The obvious library choice — LangChain agents (which the README incorrectly claimed as part of the stack) — has never been a dependency. The AI service is deliberately dependency-light: hand-rolled `httpx` providers for Gemini and OpenAI (`app/generation/llm.py`) and a plain prompt builder. Adding an agent framework would pull in a large transitive tree for what is, here, a bounded loop over two REST APIs that already support function calling natively. The acceptance criterion is behavioural: the agent must choose the correct tool for ≥ 8/10 labeled prompts (`eval/agent_cases.jsonl`).
+
+### Decision
+1. **Native tool calling, zero new dependencies.** The provider abstraction gains `generate_with_tools(messages, tools) -> AgentTurn`, where `AgentTurn` carries optional text plus `ToolCall(name, arguments, call_id)` items. Gemini maps the neutral transcript to `functionDeclarations` / `functionCall` / `functionResponse`; OpenAI maps it to `tools` / `tool_calls` / `tool` messages. The base-class default raises `LLMError`, so a future provider must opt in explicitly.
+2. **One provider-neutral transcript.** The loop speaks a small message format (`system` / `user` / `assistant` with `tool_calls` / `tool` with a JSON payload); adapters translate it (`_gemini_contents` merges consecutive same-role turns, as Gemini requires alternating roles).
+3. **Three deterministic tools with registry-owned citations.** `search_game_docs(game, question)`, `compare_games(game_a, game_b)` and `list_games_by_year(year)` live in `app/agent/tools.py`. The registry injects the same hybrid-retrieval callable as `/query` (`_retrieve_passages`, refactored out of `_embed_and_retrieve`), assigns stable `[N]` citation numbers across all tool calls, registers each evidence passage once (first-seen order) and caches identical calls, so both the transcript and the final `sources` list stay bounded and duplicate-free. The year catalog is static, sourced from the manuals' `Release Date` lines and covered by a corpus-audit test.
+4. **Bounded loop with a grounded fallback.** `run_agent` (`app/agent/loop.py`) allows at most `max_steps` model turns (request 1–6; service default 3 via `agent_default_max_steps`). If the budget is exhausted while the model keeps calling tools, the loop closes deterministically: with evidence it answers through the standard `build_rag_prompt`; without evidence it returns the exact RAG refusal. A tool-happy model can neither loop forever nor answer ungrounded.
+5. **`POST /agent` on the AI service only.** The endpoint returns `answer`, the collected `sources`, `tools_used` (name + arguments in call order), `steps` and `latency_ms`; errors map exactly like `/query` (502 embedding/LLM, 503 vector store). Gateway routing, UI and caching are out of scope for this item, mirroring how previous features landed service-first.
+6. **Routing is evaluated offline-first.** `eval/agent_eval.py` scores the 10 labeled prompts against `POST /agent` (subset argument matching tolerates `game_a`/`game_b` order and alias forms; the guard fails below 80%). `tests/test_agent.py` scripts the model with a fake provider, so the loop, registry and both provider adapters are covered without an API key; the live ≥ 8/10 run remains pending a provider key (same blocker as ADR 0002–0004).
+7. **The README's LangChain claim is removed.** The tech-stack line and acknowledgments now describe the actual stack (custom httpx providers, fastembed).
+
+### Consequences
+- Agent mode is dependency-free and reviewable: one new package (`app/agent/`), one tool-calling method per vendor, one endpoint, and deterministic tests for every path except live model routing.
+- The neutral transcript is the new contract; adding a provider or a tool is additive, and tools must go through the registry to preserve citation/source invariants.
+- Latency is strictly higher than `/query`: each tool round-trip adds a retrieval plus one model call (bounded at `max_steps` turns plus the final answer). `_log_agent` emits `tools_used`, `steps` and per-stage timings per request.
+- Live routing quality (≥ 8/10) and fallback answer quality still need a credentialed run; the offline harness makes that a one-command follow-up when a key is available.

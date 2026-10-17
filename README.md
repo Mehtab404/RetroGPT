@@ -64,7 +64,7 @@
 
 ### Tech Stack
 
-- **AI Service:** Python 3.12, FastAPI, LangChain, sentence-transformers
+- **AI Service:** Python 3.12, FastAPI, httpx (native Gemini / OpenAI providers), fastembed (ONNX embeddings + re-ranking)
 - **API Gateway:** Node.js 20 LTS, TypeScript, Express, zod
 - **Frontend:** React, Vite, TypeScript
 - **Vector DB:** Qdrant (hybrid search support)
@@ -428,6 +428,48 @@ regular JSON error responses with the same status codes as `POST /api/chat`
 exactly like non-streamed answers, and a cache hit is replayed as SSE with
 `"cached": true` so clients use one code path.
 
+### Agent Mode (Tool Calling)
+
+`POST /agent` on the AI service (port 8000) answers with **native tool
+calling** instead of a single retrieval pass: the model chooses between three
+deterministic tools, the service executes them, and the final answer cites
+the evidence they returned.
+
+```bash
+POST /agent
+Body:
+{
+  "question": "Compare the scoring systems in Asteroids and Breakout.",
+  "max_steps": 3
+}
+
+Response:
+{
+  "answer": "Asteroids awards 20 points per large asteroid [1], while Breakout ... [2]",
+  "sources": [ ... ],
+  "tools_used": [
+    {"name": "compare_games", "arguments": {"game_a": "asteroids", "game_b": "breakout"}}
+  ],
+  "steps": 2,
+  "latency_ms": 4310,
+  "cached": false
+}
+```
+
+| Tool | Purpose |
+|---|---|
+| `search_game_docs(game, question)` | Passages about one game |
+| `compare_games(game_a, game_b)` | Side-by-side evidence for two games |
+| `list_games_by_year(year)` | Knowledge-base games released in a year |
+
+- `max_steps` caps model turns (1–6; service default 3). If the budget runs
+  out mid-tool-use, the service closes with a deterministic grounded answer
+  built from the evidence already collected.
+- Errors mirror `POST /query`: 502 (embedding/LLM provider), 503 (vector store).
+- Tool routing is measured by [`eval/agent_eval.py`](./eval/agent_eval.py)
+  against 10 labeled prompts (target: ≥ 8/10). The route is currently
+  AI-service-only — the API gateway and UI still use the standard chat path.
+
 ### Session History
 
 ```bash
@@ -502,7 +544,7 @@ This is a portfolio/learning project. Contributions are welcome!
 - [x] M3: Frontend UI
 - [x] M4: Evaluation suite and quality improvements
 - [ ] M5: Production deployment (AWS + CI/CD) — structured logging, production compose and the CD workflow (`deploy.yml`) done; public URL pending AWS credentials
-- [ ] M6: Polish (load tests, documentation) — streaming done (#25); k6 load-test harness ready (numbers pending GOOGLE_API_KEY)
+- [ ] M6: Polish (load tests, documentation) — streaming done (#25); agent mode with native tool calling done (#35); k6 load-test harness ready (numbers pending GOOGLE_API_KEY)
 
 See [GitHub Issues](https://github.com/Mehtab404/RetroGPT/issues) for detailed task breakdown.
 
@@ -543,7 +585,7 @@ _This section will be filled after M4-M6 completion._
 ## 🙏 Acknowledgments
 
 - Classic game manuals from [Internet Archive](https://archive.org/)
-- [LangChain](https://www.langchain.com/) for RAG orchestration
+- [fastembed](https://github.com/qdrant/fastembed) for local ONNX embeddings and cross-encoder re-ranking
 - [Qdrant](https://qdrant.tech/) for hybrid vector search
 - [RAGAS](https://github.com/explodinggradients/ragas) for evaluation framework
 

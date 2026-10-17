@@ -12,6 +12,8 @@ from fastapi.responses import StreamingResponse
 from qdrant_client import QdrantClient
 from qdrant_client.http.exceptions import UnexpectedResponse
 
+from app.agent.loop import run_agent
+from app.agent.tools import ToolRegistry
 from app.config import settings
 from app.generation.llm import LLMError, get_llm_provider
 from app.generation.prompts import build_rag_prompt
@@ -20,7 +22,14 @@ from app.logging_config import configure_logging
 from app.middleware import RequestIdMiddleware
 from app.retrieval.rerank import retrieve
 from app.retrieval.vector_store import QdrantVectorStore, SearchResult, VectorStoreError
-from app.schemas import QueryRequest, QueryResponse, SourceDoc
+from app.schemas import (
+    AgentRequest,
+    AgentResponse,
+    AgentToolCall,
+    QueryRequest,
+    QueryResponse,
+    SourceDoc,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -208,6 +217,87 @@ async def query(request: QueryRequest) -> QueryResponse:
     )
 
 
+@app.post("/agent", response_model=AgentResponse)
+async def agent_answer(request: AgentRequest) -> AgentResponse:
+    """Answer a question with native tool calling (Issue #35 / backlog #30).
+
+    Pipeline:
+
+    1. Build a tool registry bound to the same retrieval pipeline as
+       :func:`query` — evidence passages receive stable ``[N]`` citation
+       numbers for the final answer.
+    2. Run the bounded tool-calling loop with the configured LLM provider:
+       the model may call ``search_game_docs``, ``compare_games`` and/or
+       ``list_games_by_year`` before answering.
+    3. Return the final answer plus the collected evidence and the tools used.
+
+    Errors map exactly like :func:`query`:
+
+    * ``502`` — embedding or LLM provider failure.
+    * ``503`` — vector store unavailable.
+
+    Args:
+        request: Validated :class:`~app.schemas.AgentRequest` body.
+
+    Returns:
+        :class:`~app.schemas.AgentResponse` with answer, sources, tools used
+        and the number of model turns taken.
+    """
+    t_start = time.monotonic()
+    stage_ms: dict[str, float] = {}
+    retrieve_timings: dict[str, float] = {}
+
+    async def search(
+        question: str,
+        top_k: int,
+        game_slug: str | None,
+    ) -> list[SearchResult]:
+        """Retrieval callable injected into the tool registry."""
+        return await _retrieve_passages(
+            question,
+            top_k,
+            game_slug,
+            stage_ms,
+            retrieve_timings,
+        )
+
+    registry = ToolRegistry(search=search)
+    max_steps = request.max_steps or settings.agent_default_max_steps
+    llm = get_llm_provider()
+    try:
+        result = await run_agent(
+            llm=llm,
+            question=request.question,
+            registry=registry,
+            max_steps=max_steps,
+        )
+    except LLMError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"LLM provider error: {exc}",
+        ) from exc
+
+    total_ms = _elapsed_ms(t_start)
+    _log_agent(
+        stage_ms=stage_ms,
+        tools_used=result.tools_used,
+        steps=result.steps,
+        result_count=len(result.sources),
+        total_ms=total_ms,
+    )
+
+    return AgentResponse(
+        answer=result.answer,
+        sources=_build_sources(result.sources),
+        tools_used=[
+            AgentToolCall(name=str(call["name"]), arguments=call.get("arguments") or {})
+            for call in result.tools_used
+        ],
+        steps=result.steps,
+        latency_ms=round(total_ms, 2),
+    )
+
+
 @app.post("/query/stream")
 async def query_stream(request: QueryRequest) -> StreamingResponse:
     """Stream the answer for a question as Server-Sent Events (Issue #25).
@@ -266,11 +356,35 @@ async def _embed_and_retrieve(
     stage_ms: dict[str, float],
     retrieve_timings: dict[str, float],
 ) -> list[SearchResult]:
-    """Run pipeline steps 1-2: embed the question, retrieve passages.
+    """Run pipeline steps 1-2 for a ``/query`` request (thin wrapper).
 
-    Shared by the ``/query`` and ``/query/stream`` endpoints.  Per-stage
-    latencies are recorded into *stage_ms*; *retrieve_timings* receives the
-    hybrid-search / re-rank split from :func:`app.retrieval.rerank.retrieve`.
+    Kept for the ``/query`` and ``/query/stream`` endpoints; the actual
+    work lives in :func:`_retrieve_passages`, which the agent tools also
+    call (Issue #35).
+    """
+    return await _retrieve_passages(
+        request.question,
+        request.top_k,
+        request.game_slug,
+        stage_ms,
+        retrieve_timings,
+    )
+
+
+async def _retrieve_passages(
+    question: str,
+    top_k: int,
+    game_slug: str | None,
+    stage_ms: dict[str, float],
+    retrieve_timings: dict[str, float],
+) -> list[SearchResult]:
+    """Embed *question* and retrieve passages (shared by all endpoints).
+
+    Shared by ``/query``, ``/query/stream`` and the agent tools (#35), which
+    is why the inputs are plain values rather than a :class:`QueryRequest`.
+    Per-stage latencies are recorded into *stage_ms*; *retrieve_timings*
+    receives the hybrid-search / re-rank split from
+    :func:`app.retrieval.rerank.retrieve`.
 
     Raises:
         HTTPException 502: If the embedding provider call fails.
@@ -282,7 +396,7 @@ async def _embed_and_retrieve(
     embedder = get_embedding_provider()
     t_stage = time.monotonic()
     try:
-        query_vector = await embedder.embed_query(request.question)
+        query_vector = await embedder.embed_query(question)
     except EmbeddingError as exc:
         raise HTTPException(
             status_code=502,
@@ -297,14 +411,14 @@ async def _embed_and_retrieve(
     # NOTE: ingested chunk metadata stores the slug under the ``game`` key
     # (see app/ingestion/loaders.py), so the filter must match ``game``.
     qdrant_filter = None
-    if request.game_slug:
+    if game_slug:
         from qdrant_client.http import models as qdrant_models
 
         qdrant_filter = qdrant_models.Filter(
             must=[
                 qdrant_models.FieldCondition(
                     key="game",
-                    match=qdrant_models.MatchValue(value=request.game_slug),
+                    match=qdrant_models.MatchValue(value=game_slug),
                 )
             ]
         )
@@ -315,9 +429,9 @@ async def _embed_and_retrieve(
         # ``retrieve_timings`` (Issue #24 stage observability).
         search_results = await retrieve(
             vector_store,
-            request.question,
+            question,
             query_vector,
-            top_k=request.top_k,
+            top_k=top_k,
             filter=qdrant_filter,
             timings=retrieve_timings,
         )
@@ -470,3 +584,24 @@ def _log_query(
         extra["chunk_count"] = chunk_count
 
     logger.info("query", extra=extra)
+
+
+def _log_agent(
+    *,
+    stage_ms: dict[str, float],
+    tools_used: list[dict[str, Any]],
+    steps: int,
+    result_count: int,
+    total_ms: float,
+) -> None:
+    """Emit one structured ``agent`` event with per-stage latencies (#35)."""
+    logger.info(
+        "agent",
+        extra={
+            "stage_ms": {stage: round(value, 2) for stage, value in stage_ms.items()},
+            "tools_used": [str(call.get("name", "")) for call in tools_used],
+            "steps": steps,
+            "result_count": result_count,
+            "total_ms": round(total_ms, 2),
+        },
+    )

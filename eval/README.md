@@ -9,6 +9,8 @@ Measures RetroGPT's retrieval and answer quality against a labeled dataset.
 | `dataset.jsonl` | 70 labeled questions (Issue #18) |
 | `run_eval.py` | Stdlib-only evaluation harness (Issue #19) |
 | `retrieval_eval.py` | In-process retrieval evaluation: chunking sweeps + CI regression guard (Issues #22/#23) |
+| `agent_cases.jsonl` | 10 labeled tool-routing prompts for agent mode (Issue #35) |
+| `agent_eval.py` | Agent-routing harness: measures tool choice against `POST /agent` (Issue #35) |
 | `baselines/` | Committed baselines for the CI regression guard (Issue #23) |
 | `results/` | Saved runs — `<date>-<label>.json` + `.md` |
 | `requirements-eval.txt` | Optional RAGAS dependencies (`--with-ragas`) |
@@ -174,3 +176,32 @@ need a provider key (they reach the LLM); cached runs replay a warmed cache
 and work without one. The full runbook — rate-limit raise, cache flush,
 reading p50/p95, caveats — lives in
 [`loadtest/README.md`](./loadtest/README.md).
+
+## Agent routing evaluation (`agent_eval.py`, #35)
+
+`agent_eval.py` measures whether **agent mode** (`POST /agent` on the AI
+service) picks the right tool with the right arguments. It replays the 10
+labeled prompts in `agent_cases.jsonl` (5 × `search_game_docs`,
+3 × `compare_games`, 2 × `list_games_by_year`) and fails when the pass rate
+drops below `--min-pass-rate` (default 0.8 — the #35 acceptance target is
+≥ 8/10).
+
+Matching is deliberately lenient about *how* a correct route is phrased —
+extra arguments are ignored, `game_a`/`game_b` may be swapped, and
+`Pac-Man`/`pacman`, `space_invaders`/`Space Invaders` compare equal — but a
+wrong tool or wrong game fails the case.
+
+Needs a real provider key (the model chooses the calls); the harness itself
+is stdlib-only:
+
+```powershell
+docker compose exec ai-service python /eval/agent_eval.py --label agent-routing
+```
+
+Reports land in `results/<date>-agent-routing.{json,md}`. Exit codes:
+`0` ok · `1` pass rate below the guard · `2` fatal (missing cases, service
+down).
+
+The unit tests for the harness (`tests/test_agent_eval.py`) and for the
+agent loop itself (`ai-service/tests/test_agent.py`) run in CI like any
+other test — no key required, because they script the model.
