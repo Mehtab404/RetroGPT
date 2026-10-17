@@ -10,6 +10,14 @@ import axios, { AxiosError } from 'axios';
 import app from '../app';
 import * as aiClient from '../services/aiClient';
 
+// Mock Session model so no real MongoDB calls are made in chat tests
+jest.mock('../models/session', () => ({
+  Session: {
+    findOne: jest.fn(),
+    findOneAndUpdate: jest.fn().mockResolvedValue(null),
+  },
+}));
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
