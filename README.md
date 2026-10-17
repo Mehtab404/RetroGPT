@@ -212,14 +212,22 @@ docker compose exec ai-service python /eval/run_eval.py --compare results/baseli
 
 ## 📈 Evaluation & Quality
 
-RetroGPT uses a comprehensive evaluation framework to measure retrieval and generation quality:
+RetroGPT is measured against a 70-question labeled dataset (`eval/dataset.jsonl`):
 
 - **Hit Rate @5:** Percentage of queries where the correct document appears in top 5 results
 - **MRR (Mean Reciprocal Rank):** Average of 1/rank for first relevant result
-- **RAGAS Faithfulness:** Measures if answers are grounded in retrieved context
-- **RAGAS Answer Relevancy:** Measures answer quality vs. question
+- **Refusal accuracy:** Unanswerable questions correctly answered with "I don't know"
+- **RAGAS Faithfulness / Answer Relevancy:** Optional LLM-judged answer quality
 
-All metrics are tracked across baseline and improved configurations. See `eval/results/` for detailed reports.
+```powershell
+# Run the evaluation against the local stack (writes eval/results/)
+docker compose exec ai-service python /eval/run_eval.py --label baseline
+```
+
+Every run writes a JSON + Markdown report to `eval/results/`. See
+[`eval/README.md`](./eval/README.md) for the dataset schema, metric
+definitions, flags, and the CI regression guard (`--min-hit-rate`,
+`--baseline`).
 
 ---
 
@@ -270,7 +278,7 @@ Response:
     {
       "id": "asteroids_manual_p3_c2",
       "title": "Asteroids Manual",
-      "page": 3,
+      "source": "/data/raw/asteroids/asteroids_manual.md",
       "score": 0.91,
       "snippet": "Large asteroids: 20 points..."
     }

@@ -140,7 +140,9 @@ async def query(request: QueryRequest) -> QueryResponse:
     # ------------------------------------------------------------------
     # 2. Retrieve relevant passages from the vector store
     # ------------------------------------------------------------------
-    # Build an optional Qdrant payload filter for game_slug.
+    # Build an optional Qdrant payload filter for the game slug.
+    # NOTE: ingested chunk metadata stores the slug under the ``game`` key
+    # (see app/ingestion/loaders.py), so the filter must match ``game``.
     qdrant_filter = None
     if request.game_slug:
         from qdrant_client.http import models as qdrant_models
@@ -148,7 +150,7 @@ async def query(request: QueryRequest) -> QueryResponse:
         qdrant_filter = qdrant_models.Filter(
             must=[
                 qdrant_models.FieldCondition(
-                    key="game_slug",
+                    key="game",
                     match=qdrant_models.MatchValue(value=request.game_slug),
                 )
             ]
@@ -174,10 +176,7 @@ async def query(request: QueryRequest) -> QueryResponse:
         # No relevant passages found — return a graceful "no context" answer.
         t_end = time.monotonic()
         return QueryResponse(
-            answer=(
-                "I don't know — this information is not available in the "
-                "provided sources."
-            ),
+            answer="I don't know — this information is not available in the provided sources.",
             sources=[],
             latency_ms=(t_end - t_start) * 1000,
         )
@@ -215,6 +214,7 @@ async def query(request: QueryRequest) -> QueryResponse:
         SourceDoc(
             id=result.chunk_id,
             title=str(result.payload.get("title", result.payload.get("source", ""))),
+            source=str(result.payload.get("source", "")),
             score=round(result.score, 4),
             snippet=result.content[:300],
         )

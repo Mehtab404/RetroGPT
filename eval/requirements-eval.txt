@@ -1,0 +1,6 @@
+# Optional dependencies for RAGAS metrics in eval/run_eval.py (--with-ragas).
+# Not required for the stdlib-only baseline run.
+#
+# Install into the AI service environment:
+#   docker compose exec ai-service pip install -r /eval/requirements-eval.txt
+ragas>=0.2.0,<0.4
