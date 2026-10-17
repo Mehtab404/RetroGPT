@@ -11,6 +11,7 @@
 
 - **Accurate retrieval:** Hybrid search (vector + BM25) with cross-encoder re-ranking
 - **Source citations:** Every answer includes references to original documents
+- **Token-by-token streaming:** Answers stream over Server-Sent Events (SSE) from the LLM to the UI
 - **Production-ready:** Docker Compose, CI/CD, automated evaluation, structured JSON logs with request IDs
 - **Fast responses:** Redis caching for sub-200ms repeated queries
 - **Persistent chat:** MongoDB-backed session history
@@ -50,7 +51,7 @@
    └─────────────┘           │  - validation  │──────► MongoDB (chat)
                              │  - caching     │──────► Redis (cache)
                              └───────┬────────┘
-                                     │ HTTP
+                                     │ HTTP + SSE
                                      ▼
                              ┌────────────────┐
                              │   AI Service   │  Python + FastAPI
@@ -155,7 +156,8 @@ generates one when absent, echoes it on the response and forwards it to the
 AI service — reusing the same id across retries — so every line belonging to
 one request is correlated across both services. The AI service additionally
 logs per-stage latencies (`embed`, `retrieve` with `hybrid_search_ms` /
-`rerank_ms`, `generate`) in a single `query` event.
+`rerank_ms`, `generate`) in a single `query` event; streamed requests add a
+`streamed` flag and `chunk_count` to the same events.
 
 Set `LOG_LEVEL` (`debug` | `info` | `warn` | `error`, default `info`) in `.env`
 to control verbosity; `debug` also logs `/health` probes. See
@@ -331,6 +333,52 @@ Response:
 }
 ```
 
+### Streaming Chat (SSE)
+
+`POST /api/chat/stream` is the streaming twin of `POST /api/chat`: instead of
+one JSON response it relays the answer token-by-token as Server-Sent Events.
+The UI uses it so answers appear as they are generated.
+
+```bash
+POST /api/chat/stream
+Headers: x-api-key: <your-api-key>
+         Accept: text/event-stream
+Body:
+{
+  "sessionId": "optional-session-uuid",
+  "question": "How do you score points in Asteroids?"
+}
+```
+
+The response is an SSE stream of `event:` / `data:` frames:
+
+```
+event: meta
+data: {"sources":[{"id":"asteroids_manual_p3_c2","title":"Asteroids Manual","score":0.91,"snippet":"..."}]}
+
+event: token
+data: {"text":"You score points "}
+
+event: token
+data: {"text":"by destroying asteroids [1]."}
+
+event: done
+data: {"sessionId":"uuid","latency_ms":1820,"cached":false}
+```
+
+- `meta` arrives once retrieval finishes and carries the sources for the answer.
+- `token` carries one generated chunk (`text`).
+- `done` closes the stream with the `sessionId`, upstream latency and whether
+  the answer was served from the Redis cache.
+- `error` (`{"code","message"}`) is sent if generation fails mid-stream; tokens
+  already delivered remain valid.
+
+Failures **before** the first frame (validation, AI service down, timeout) are
+regular JSON error responses with the same status codes as `POST /api/chat`
+(400 / 502 / 504). Completed streams are cached and persisted to MongoDB
+exactly like non-streamed answers, and a cache hit is replayed as SSE with
+`"cached": true` so clients use one code path.
+
 ### Session History
 
 ```bash
@@ -396,7 +444,7 @@ This is a portfolio/learning project. Contributions are welcome!
 - [x] M3: Frontend UI
 - [x] M4: Evaluation suite and quality improvements
 - [ ] M5: Production deployment (AWS + CI/CD) — structured logging + request IDs done (#24)
-- [ ] M6: Polish (streaming, load tests, documentation)
+- [ ] M6: Polish (load tests, documentation) — streaming done (#25)
 
 See [GitHub Issues](https://github.com/YOUR_USERNAME/retrogpt/issues) for detailed task breakdown.
 

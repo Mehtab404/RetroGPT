@@ -143,3 +143,32 @@ Issue #24 requires one request to be traceable across both services' logs. The g
 - No new npm/pip packages to audit or keep current; the level set and event shape stay intentionally small.
 - In Python, request context propagates automatically; in TypeScript the call sites pass `request_id` into log fields explicitly (e.g. `aiClient` retries).
 - Shipping logs to CloudWatch/ECS follows the container-stdout contract and is wired up with the production compose in #26.
+
+---
+
+## ADR 0006: Token-by-Token Streaming via Server-Sent Events
+
+- **Status:** Accepted
+- **Date:** 2026-10-17
+- **Issue:** #25
+
+### Context
+Issue #25 requires the answer to appear token-by-token in the UI, which means LLM tokens must travel AI service → gateway → browser without being buffered anywhere. The existing `POST /api/chat` path returns one JSON body only after generation completes, and a proxy (Nginx) sits in front of both services. The design must also preserve the existing contracts that make the API pleasant to use: Redis caching, MongoDB persistence, session IDs, standard JSON error envelopes before any output, and no duplicated text or phantom cache entries when failures happen mid-answer.
+
+### Decision
+1. **Protocol — SSE with a four-event vocabulary.** The AI service emits `event: meta|token|done|error` frames with single-line JSON `data:` payloads (`meta {sources}`, `token {text}`, `done {latency_ms}`, `error {code, message}`). The gateway relays `meta`/`token` verbatim and **enriches** the terminal `done` frame to `{sessionId, latency_ms, cached}` so clients never need a second request to learn their session ID. A blank line terminates each frame.
+2. **Failure boundary is the first frame.** Anything that fails *before* the first SSE byte (validation, AI service unreachable, upstream 4xx/5xx, timeout) is still a regular JSON HTTP error with the same status mapping as `POST /api/chat` (422 → 400, 5xx → 502, timeout → 504, network → 502) — headers have not been sent yet, so clients keep normal error handling. Once streaming has started, failures are delivered as an `error` event because the status line is already on the wire; tokens already delivered stay valid.
+3. **Transport — POST + `fetch` + `ReadableStream`, not `EventSource`.** `EventSource` cannot send POST bodies, `x-api-key` headers, or read non-2xx JSON envelopes, so the frontend streams via `fetch` and a small incremental frame parser that buffers partial frames across chunk boundaries and tolerates CRLF.
+4. **Retries exist only before the first token.** The gateway reuses the `aiClient` retry budget (3 attempts, 300 ms backoff) **only while opening the stream**. Retrying after tokens have been emitted would duplicate output; a mid-stream break is reported as an `error` event instead.
+5. **Cache and persist only completed streams.** The gateway accumulates relayed tokens; on a clean `done` it calls `setCachedResponse(...)` and persists both messages exactly like the non-streamed path. Interrupted or failed streams are neither cached nor persisted. A cache hit is replayed as `meta` + one `token` + `done {"cached": true}` so the client has a single rendering path for cached and fresh answers.
+6. **Zero new dependencies.** The SSE frame formatter/parser in the gateway (`src/utils/sse.ts`), the AI service's `generate_stream` generator, and the frontend's `streamQuestion` parser are all hand-rolled; `eventsource-parser`/EventSource polyfills are not needed.
+7. **Provider adapters.** `LLMProvider.generate_stream` has a default implementation that falls back to `generate` and yields the whole answer as one chunk, so every provider streams correctly even without native streaming. Gemini uses `streamGenerateContent?alt=sse`; OpenAI uses `stream: true` plus the `[DONE]` sentinel. A `_with_stream_retry` helper retries only before the first chunk, mirroring the gateway rule.
+8. **Nginx flushes frames.** An exact-match `location = /api/chat/stream` sets `proxy_buffering off` (with `proxy_cache off` and 120 s read/send timeouts) so tokens reach the browser immediately; the plain `location /api/` fallback keeps its default buffering for WSGI-style endpoints.
+9. **UI stays intentionally thin.** The frontend adds an assistant placeholder immediately, appends `onToken` chunks, shows the typing indicator only until the first token (or `meta`), keeps partially streamed text when a stream breaks mid-answer, and removes the empty placeholder plus shows the standard error banner when a request fails before any content. The non-streaming `sendQuestion` client remains exported for compatibility.
+
+### Consequences
+- The acceptance criterion ("answer appears token-by-token in the UI") holds in dev compose; the exact same code runs behind Nginx with buffering disabled for that one location.
+- One event vocabulary is shared by all three tiers, and the gateway `done` enrichment means session bookkeeping stays in the same response, so clients need no second call.
+- Cached answers and mid-stream failures have defined, tested semantics: no duplicate cache entries, no persisted partial answers, no silent truncation.
+- The hand-rolled parsers are ~40 lines each and are covered by unit tests (frame splitting, CRLF, keep-alives, mid-stream errors); the cost of a dependency was judged higher than the cost of maintaining them.
+- Live token-by-token verification with a real provider still requires `GOOGLE_API_KEY`/`OPENAI_API_KEY`; without credentials the plumbing can be verified with a mock upstream (see Tests section).

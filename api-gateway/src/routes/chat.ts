@@ -16,11 +16,18 @@ import { randomUUID } from 'crypto';
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { queryAiService } from '../services/aiClient';
-import { getCachedResponse, setCachedResponse } from '../services/cache';
+import {
+  openAiStream,
+  AiStreamHttpError,
+  AiStreamNetworkError,
+  type AiStream,
+} from '../services/aiStream';
+import { getCachedResponse, setCachedResponse, type CachedResponse } from '../services/cache';
 import { AppError } from '../middleware/errorHandler';
 import { AxiosError } from 'axios';
 import { Session } from '../models/session';
 import { logger } from '../utils/logger';
+import { formatSseEvent } from '../utils/sse';
 
 // ---------------------------------------------------------------------------
 // Validation schema
@@ -38,6 +45,26 @@ const chatRequestSchema = z.object({
 });
 
 export type ChatRequest = z.infer<typeof chatRequestSchema>;
+
+/**
+ * Validate the request body against {@link chatRequestSchema}.
+ *
+ * On failure responds with the standard 400 envelope and returns `null`.
+ */
+function validateChatRequest(req: Request, res: Response): ChatRequest | null {
+  const parseResult = chatRequestSchema.safeParse(req.body);
+  if (!parseResult.success) {
+    res.status(400).json({
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'Invalid request data',
+        details: parseResult.error.errors,
+      },
+    });
+    return null;
+  }
+  return parseResult.data;
+}
 
 // ---------------------------------------------------------------------------
 // Router
@@ -57,19 +84,10 @@ const router = Router();
  */
 router.post('/chat', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   // 1. Validate request body
-  const parseResult = chatRequestSchema.safeParse(req.body);
-  if (!parseResult.success) {
-    res.status(400).json({
-      error: {
-        code: 'VALIDATION_ERROR',
-        message: 'Invalid request data',
-        details: parseResult.error.errors,
-      },
-    });
-    return;
-  }
+  const parsed = validateChatRequest(req, res);
+  if (parsed === null) return;
 
-  const { question, sessionId } = parseResult.data;
+  const { question, sessionId } = parsed;
   const resolvedSessionId = sessionId ?? randomUUID();
 
   // 2. Check Redis cache
@@ -197,6 +215,199 @@ router.post('/chat', async (req: Request, res: Response, next: NextFunction): Pr
 });
 
 // ---------------------------------------------------------------------------
+// Streaming route
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /api/chat/stream
+ *
+ * Streaming variant of `POST /api/chat` (Issue #25): relays the AI
+ * service's Server-Sent Events to the client and accumulates the answer so
+ * completed streams are cached and persisted exactly like non-streamed
+ * requests.
+ *
+ * SSE events sent to the client:
+ *   meta  — `{ sources: [...] }` once retrieval finished
+ *   token — `{ text: "..." }` per generated chunk
+ *   done  — `{ sessionId, latency_ms, cached }`
+ *   error — `{ code, message }` if generation fails mid-stream
+ *
+ * Failures *before* the first SSE event are regular JSON responses with the
+ * same status codes as `POST /api/chat` (400/502/504).
+ */
+router.post(
+  '/chat/stream',
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    // 1. Validate request body
+    const parsed = validateChatRequest(req, res);
+    if (parsed === null) return;
+
+    const { question, sessionId } = parsed;
+    const resolvedSessionId = sessionId ?? randomUUID();
+
+    // 2. Cache hit — replay the stored answer as SSE so the client code
+    //    path is identical for cached and fresh responses.
+    const cached = await getCachedResponse(question);
+    if (cached !== null) {
+      await persistMessages(
+        resolvedSessionId,
+        question,
+        cached.answer,
+        cached.sources,
+        req.requestId,
+      );
+
+      logger.info('chat_completed', {
+        request_id: req.requestId,
+        cached: true,
+        streamed: true,
+        latency_ms: cached.latency_ms,
+        sources: cached.sources.length,
+        question_chars: question.length,
+      });
+
+      writeSseHeaders(res);
+      writeSse(res, 'meta', { sources: cached.sources });
+      writeSse(res, 'token', { text: cached.answer });
+      writeSse(res, 'done', {
+        sessionId: resolvedSessionId,
+        latency_ms: cached.latency_ms,
+        cached: true,
+      });
+      res.end();
+      return;
+    }
+
+    // 3. Open the upstream stream. Failures here happen before any SSE byte
+    //    is sent, so they can still become regular JSON error responses.
+    let stream: AiStream;
+    try {
+      stream = await openAiStream({ question }, req.requestId);
+    } catch (err) {
+      handleStreamOpenError(err, req, res, next);
+      return;
+    }
+
+    writeSseHeaders(res);
+
+    let clientClosed = false;
+    res.on('close', () => {
+      if (!res.writableEnded) clientClosed = true;
+    });
+    // Swallow late socket errors (e.g. client disconnects) so a dropped
+    // connection never crashes the process.
+    res.on('error', () => {
+      clientClosed = true;
+    });
+
+    const startMs = Date.now();
+    let answer = '';
+    let sources: CachedResponse['sources'] = [];
+    let upstreamLatencyMs: number | null = null;
+    let chunkCount = 0;
+    let failed = false;
+
+    // 4. Relay events, accumulating the answer for cache/persistence.
+    try {
+      for await (const event of stream.events) {
+        if (clientClosed) break;
+
+        switch (event.event) {
+          case 'meta': {
+            sources = Array.isArray(event.data.sources)
+              ? (event.data.sources as CachedResponse['sources'])
+              : [];
+            writeSse(res, 'meta', { sources });
+            break;
+          }
+          case 'token': {
+            const text = typeof event.data.text === 'string' ? event.data.text : '';
+            if (text.length > 0) {
+              answer += text;
+              chunkCount += 1;
+              writeSse(res, 'token', { text });
+            }
+            break;
+          }
+          case 'done': {
+            upstreamLatencyMs =
+              typeof event.data.latency_ms === 'number' ? event.data.latency_ms : null;
+            break;
+          }
+          case 'error': {
+            failed = true;
+            const code = typeof event.data.code === 'string' ? event.data.code : 'AI_SERVICE_ERROR';
+            const message =
+              typeof event.data.message === 'string'
+                ? event.data.message
+                : 'The AI service failed while generating the answer.';
+            logger.warn('chat_stream_failed', {
+              request_id: req.requestId,
+              code,
+              chunk_count: chunkCount,
+            });
+            writeSse(res, 'error', { code, message });
+            break;
+          }
+          default:
+            break;
+        }
+      }
+    } catch (err) {
+      failed = true;
+      logger.error('chat_stream_failed', {
+        request_id: req.requestId,
+        chunk_count: chunkCount,
+        error: err,
+      });
+      writeSse(res, 'error', {
+        code: 'AI_SERVICE_ERROR',
+        message: 'The connection to the AI service was interrupted.',
+      });
+    }
+
+    if (clientClosed) {
+      logger.info('chat_stream_client_closed', {
+        request_id: req.requestId,
+        chunk_count: chunkCount,
+      });
+      res.end();
+      return;
+    }
+
+    if (failed) {
+      // Partial answers are not cached or persisted, mirroring the
+      // non-streaming route where a failed generation is never stored.
+      res.end();
+      return;
+    }
+
+    const latencyMs = upstreamLatencyMs ?? Date.now() - startMs;
+
+    // 5. Cache + persist the completed answer (same as the non-streaming path).
+    await setCachedResponse(question, { answer, sources, latency_ms: latencyMs });
+    await persistMessages(resolvedSessionId, question, answer, sources, req.requestId);
+
+    logger.info('chat_completed', {
+      request_id: req.requestId,
+      cached: false,
+      streamed: true,
+      latency_ms: latencyMs,
+      chunk_count: chunkCount,
+      sources: sources.length,
+      question_chars: question.length,
+    });
+
+    writeSse(res, 'done', {
+      sessionId: resolvedSessionId,
+      latency_ms: latencyMs,
+      cached: false,
+    });
+    res.end();
+  },
+);
+
+// ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 
@@ -240,5 +451,80 @@ async function persistMessages(
 }
 
 export { persistMessages };
+
+/**
+ * Write SSE response headers.  `X-Accel-Buffering: no` disables nginx
+ * proxy buffering so tokens reach the browser as they are produced.
+ */
+function writeSseHeaders(res: Response): void {
+  res.status(200);
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+}
+
+/** Write one SSE frame unless the response already ended/closed. */
+function writeSse(res: Response, event: string, data: unknown): void {
+  if (res.writableEnded || res.destroyed) return;
+  res.write(formatSseEvent(event, data));
+}
+
+/** Map `openAiStream` opening failures to the standard error envelope. */
+function handleStreamOpenError(
+  err: unknown,
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void {
+  if (err instanceof AiStreamHttpError) {
+    if (err.status === 422) {
+      // Validation error from AI service — pass through as 400
+      logger.warn('chat_upstream_rejected', {
+        request_id: req.requestId,
+        upstream_status: err.status,
+      });
+      res.status(400).json({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'AI service rejected the request',
+          details: err.data,
+        },
+      });
+      return;
+    }
+
+    logger.error('chat_stream_upstream_error', {
+      request_id: req.requestId,
+      upstream_status: err.status,
+    });
+    const unavailable: AppError = new Error('AI service is unavailable. Please try again later.');
+    unavailable.statusCode = 502;
+    unavailable.code = 'AI_SERVICE_ERROR';
+    next(unavailable);
+    return;
+  }
+
+  if (err instanceof AiStreamNetworkError) {
+    if (err.timedOut) {
+      const timeoutError: AppError = new Error(
+        'Request to AI service timed out. Please try again.',
+      );
+      timeoutError.statusCode = 504;
+      timeoutError.code = 'AI_SERVICE_TIMEOUT';
+      next(timeoutError);
+      return;
+    }
+
+    const connError: AppError = new Error('Unable to reach AI service. Please try again later.');
+    connError.statusCode = 502;
+    connError.code = 'AI_SERVICE_UNREACHABLE';
+    next(connError);
+    return;
+  }
+
+  // Unknown error — hand off to the global error handler
+  next(err);
+}
 
 export default router;

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ChatWindow } from './components/ChatWindow';
-import { ApiError, getSessionHistory, sendQuestion, type Source } from './api';
+import { ApiError, getSessionHistory, streamQuestion, type Source } from './api';
 import { sourceAnchorId } from './citations';
 
 const SESSION_STORAGE_KEY = 'retrogpt.sessionId';
@@ -66,32 +66,53 @@ function App() {
       const trimmed = question.trim();
       if (!trimmed || loading) return;
 
+      // Add the user turn and an empty assistant placeholder that streamed
+      // tokens fill in. The placeholder is removed again if the request
+      // fails before any content arrived.
+      const assistantId = makeMessageId();
       setMessages((prev) => [
         ...prev,
         { id: makeMessageId(), role: 'user', content: trimmed, sources: [] },
+        { id: assistantId, role: 'assistant', content: '', sources: [] },
       ]);
       setLoading(true);
       setError(null);
 
+      let receivedContent = false;
+      const updateAssistant = (update: (message: ChatMessage) => ChatMessage) => {
+        setMessages((prev) =>
+          prev.map((message) => (message.id === assistantId ? update(message) : message)),
+        );
+      };
+
       try {
-        const response = await sendQuestion(trimmed, sessionId ?? undefined);
-        setSessionId(response.sessionId);
-        localStorage.setItem(SESSION_STORAGE_KEY, response.sessionId);
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: makeMessageId(),
-            role: 'assistant',
-            content: response.answer,
-            sources: response.sources,
+        await streamQuestion(trimmed, {
+          sessionId: sessionId ?? undefined,
+          onMeta: (sources) => {
+            receivedContent = true;
+            updateAssistant((message) => ({ ...message, sources }));
           },
-        ]);
+          onToken: (text) => {
+            receivedContent = true;
+            updateAssistant((message) => ({ ...message, content: message.content + text }));
+          },
+          onDone: (done) => {
+            if (done.sessionId) {
+              setSessionId(done.sessionId);
+              localStorage.setItem(SESSION_STORAGE_KEY, done.sessionId);
+            }
+          },
+        });
       } catch (err) {
         const message =
           err instanceof ApiError
             ? err.message
             : 'Something went wrong while contacting the server. Please try again.';
         setError(message);
+        if (!receivedContent) {
+          // Nothing streamed — drop the empty assistant placeholder.
+          setMessages((prev) => prev.filter((m) => m.id !== assistantId));
+        }
       } finally {
         setLoading(false);
       }

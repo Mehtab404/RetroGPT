@@ -25,9 +25,11 @@ All provider methods are ``async`` and use ``httpx.AsyncClient`` internally.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import random
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
@@ -111,6 +113,24 @@ class LLMProvider(ABC):
                       retry attempts are exhausted.
         """
 
+    async def generate_stream(self, prompt: str) -> AsyncIterator[str]:
+        """Stream the response for *prompt* chunk by chunk (Issue #25).
+
+        The default implementation falls back to the non-streaming
+        :meth:`generate` and yields the complete answer as a single chunk;
+        providers with native streaming support override this method.
+
+        Args:
+            prompt: The full prompt string.
+
+        Yields:
+            Successive text chunks of the generated answer.
+
+        Raises:
+            LLMError: If generation fails.
+        """
+        yield await self.generate(prompt)
+
     # ------------------------------------------------------------------
     # Shared retry helper
     # ------------------------------------------------------------------
@@ -165,6 +185,90 @@ class LLMProvider(ABC):
         raise LLMError(
             f"LLM API failed after {self.max_retries + 1} attempts: {last_exc}"
         ) from last_exc
+
+    async def _with_stream_retry(
+        self, coro_fn: Any, *args: Any, **kwargs: Any
+    ) -> AsyncIterator[str]:
+        """Execute streaming *coro_fn* with retry until the first chunk.
+
+        Retrying a stream that has already yielded text would duplicate
+        tokens, so transient failures are only retried while nothing has
+        been yielded yet.
+
+        Args:
+            coro_fn: Async generator function yielding text chunks.
+            *args:   Positional arguments forwarded to *coro_fn*.
+            **kwargs: Keyword arguments forwarded to *coro_fn*.
+
+        Yields:
+            Text chunks produced by *coro_fn*.
+
+        Raises:
+            LLMError: On a non-retryable error, on a failure after streaming
+                has started, or after all retry attempts are exhausted.
+        """
+        delay = self.base_delay
+        last_exc: Exception | None = None
+
+        for attempt in range(self.max_retries + 1):
+            yielded = False
+            try:
+                async for chunk in coro_fn(*args, **kwargs):
+                    yielded = True
+                    yield chunk
+                return
+            except httpx.HTTPStatusError as exc:
+                if yielded:
+                    raise LLMError(
+                        f"LLM stream interrupted after {attempt + 1} attempt(s): {exc}"
+                    ) from exc
+                if exc.response.status_code not in _RETRYABLE_STATUS_CODES:
+                    raise LLMError(
+                        f"LLM API error {exc.response.status_code}: " f"{exc.response.text[:200]}"
+                    ) from exc
+                last_exc = exc
+                logger.warning(
+                    "LLM API returned %d on streaming attempt %d/%d; retrying…",
+                    exc.response.status_code,
+                    attempt + 1,
+                    self.max_retries + 1,
+                )
+            except httpx.RequestError as exc:
+                if yielded:
+                    raise LLMError(
+                        f"LLM stream interrupted after {attempt + 1} attempt(s): {exc}"
+                    ) from exc
+                last_exc = exc
+                logger.warning(
+                    "LLM streaming request error on attempt %d/%d: %s; retrying…",
+                    attempt + 1,
+                    self.max_retries + 1,
+                    exc,
+                )
+
+            if attempt < self.max_retries:
+                wait = delay + (random.uniform(0, 0.5) if self.jitter else 0)
+                await asyncio.sleep(wait)
+                delay *= 2
+
+        raise LLMError(
+            f"LLM API failed after {self.max_retries + 1} attempts: {last_exc}"
+        ) from last_exc
+
+
+# ---------------------------------------------------------------------------
+# SSE helpers (shared by streaming providers)
+# ---------------------------------------------------------------------------
+
+
+async def _iter_sse_data(response: httpx.Response) -> AsyncIterator[str]:
+    """Yield the payload of each ``data:`` line in an SSE response."""
+    async for line in response.aiter_lines():
+        if not line.startswith("data:"):
+            continue
+        data = line[len("data:") :].strip()
+        if data:
+            yield data
 
 
 # ---------------------------------------------------------------------------
@@ -250,6 +354,52 @@ class GeminiLLM(LLMProvider):
         except (KeyError, IndexError) as exc:
             raise LLMError(f"Unexpected Gemini response structure: {data}") from exc
 
+    async def generate_stream(self, prompt: str) -> AsyncIterator[str]:
+        """Stream text from Gemini's ``streamGenerateContent`` endpoint.
+
+        Args:
+            prompt: Full prompt string.
+
+        Yields:
+            Text chunks as they are produced.
+
+        Raises:
+            LLMError: On API errors (retried before the first chunk).
+        """
+        async for chunk in self._with_stream_retry(self._stream_api, prompt):
+            yield chunk
+
+    async def _stream_api(self, prompt: str) -> AsyncIterator[str]:
+        """Make a single streaming Gemini API call (no retry logic here)."""
+        url = (
+            f"{_GEMINI_BASE_URL}/models/{self.model}:streamGenerateContent"
+            f"?alt=sse&key={self._api_key}"
+        )
+        payload: dict[str, Any] = {
+            "contents": [
+                {
+                    "parts": [{"text": prompt}],
+                }
+            ],
+            "generationConfig": {
+                "temperature": self.temperature,
+                "maxOutputTokens": self.max_tokens,
+            },
+        }
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with client.stream("POST", url, json=payload) as response:
+                response.raise_for_status()
+                async for raw in _iter_sse_data(response):
+                    try:
+                        data = json.loads(raw)
+                        text = data["candidates"][0]["content"]["parts"][0]["text"]
+                    except (json.JSONDecodeError, KeyError, IndexError, TypeError):
+                        # Keep-alives and finish-reason-only frames carry no text.
+                        continue
+                    if text:
+                        yield text
+
 
 # ---------------------------------------------------------------------------
 # OpenAI implementation
@@ -331,6 +481,50 @@ class OpenAILLM(LLMProvider):
             return data["choices"][0]["message"]["content"]
         except (KeyError, IndexError) as exc:
             raise LLMError(f"Unexpected OpenAI response structure: {data}") from exc
+
+    async def generate_stream(self, prompt: str) -> AsyncIterator[str]:
+        """Stream chat-completion deltas from OpenAI.
+
+        Args:
+            prompt: Full prompt string (sent as a user message).
+
+        Yields:
+            Content deltas as they are produced.
+
+        Raises:
+            LLMError: On API errors (retried before the first chunk).
+        """
+        async for chunk in self._with_stream_retry(self._stream_api, prompt):
+            yield chunk
+
+    async def _stream_api(self, prompt: str) -> AsyncIterator[str]:
+        """Make a single streaming OpenAI API call (no retry logic here)."""
+        url = f"{_OPENAI_BASE_URL}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+        }
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+            "stream": True,
+        }
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with client.stream("POST", url, headers=headers, json=payload) as response:
+                response.raise_for_status()
+                async for raw in _iter_sse_data(response):
+                    if raw == "[DONE]":
+                        return
+                    try:
+                        data = json.loads(raw)
+                        text = data["choices"][0]["delta"].get("content")
+                    except (json.JSONDecodeError, KeyError, IndexError, AttributeError):
+                        continue
+                    if text:
+                        yield text
 
 
 # ---------------------------------------------------------------------------

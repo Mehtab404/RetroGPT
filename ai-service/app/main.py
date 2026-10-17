@@ -1,11 +1,14 @@
 """RetroGPT AI Service - FastAPI application."""
 
+import json
 import logging
 import time
+from collections.abc import AsyncIterator
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from qdrant_client import QdrantClient
 from qdrant_client.http.exceptions import UnexpectedResponse
 
@@ -16,7 +19,7 @@ from app.ingestion.embeddings import EmbeddingError, get_embedding_provider
 from app.logging_config import configure_logging
 from app.middleware import RequestIdMiddleware
 from app.retrieval.rerank import retrieve
-from app.retrieval.vector_store import QdrantVectorStore, VectorStoreError
+from app.retrieval.vector_store import QdrantVectorStore, SearchResult, VectorStoreError
 from app.schemas import QueryRequest, QueryResponse, SourceDoc
 
 logger = logging.getLogger(__name__)
@@ -141,6 +144,135 @@ async def query(request: QueryRequest) -> QueryResponse:
     stage_ms: dict[str, float] = {}
     retrieve_timings: dict[str, float] = {}
 
+    search_results = await _embed_and_retrieve(request, stage_ms, retrieve_timings)
+
+    # ------------------------------------------------------------------
+    # 3. Build the RAG prompt
+    # ------------------------------------------------------------------
+    if not search_results:
+        # No relevant passages found — return a graceful "no context" answer.
+        total_ms = _elapsed_ms(t_start)
+        _log_query(
+            stage_ms=stage_ms,
+            result_count=0,
+            total_ms=total_ms,
+            game_slug=request.game_slug,
+            top_k=request.top_k,
+        )
+        return QueryResponse(
+            answer="I don't know — this information is not available in the provided sources.",
+            sources=[],
+            latency_ms=total_ms,
+        )
+
+    prompt = build_rag_prompt(
+        question=request.question,
+        context_passages=[
+            {"id": result.chunk_id, "content": result.content} for result in search_results
+        ],
+    )
+
+    # ------------------------------------------------------------------
+    # 4. Generate an answer
+    # ------------------------------------------------------------------
+    llm = get_llm_provider()
+    t_stage = time.monotonic()
+    try:
+        answer = await llm.generate(prompt)
+    except LLMError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"LLM provider error: {exc}",
+        ) from exc
+    stage_ms["generate"] = _elapsed_ms(t_stage)
+
+    # ------------------------------------------------------------------
+    # 5. Build response with sources
+    # ------------------------------------------------------------------
+    total_ms = _elapsed_ms(t_start)
+
+    _log_query(
+        stage_ms=stage_ms,
+        result_count=len(search_results),
+        total_ms=total_ms,
+        game_slug=request.game_slug,
+        top_k=request.top_k,
+    )
+
+    return QueryResponse(
+        answer=answer,
+        sources=_build_sources(search_results),
+        latency_ms=round(total_ms, 2),
+    )
+
+
+@app.post("/query/stream")
+async def query_stream(request: QueryRequest) -> StreamingResponse:
+    """Stream the answer for a question as Server-Sent Events (Issue #25).
+
+    Runs the same retrieval pipeline as :func:`query`, then streams the
+    generated answer token by token so the UI can render it incrementally.
+
+    Event protocol (``event:`` name + JSON ``data:`` payload):
+
+    * ``meta``  — ``{"sources": [...]}`` sent once, before generation.
+    * ``token`` — ``{"text": "..."}`` one per generated chunk.
+    * ``done``  — ``{"latency_ms": 123.4}`` after the last chunk.
+    * ``error`` — ``{"code": "...", "message": "..."}`` if generation fails
+      mid-stream.
+
+    Failures *before* the stream starts (embedding / retrieval) are regular
+    JSON error responses with the same status codes as :func:`query`.
+
+    Args:
+        request: Validated :class:`~app.schemas.QueryRequest` body.
+
+    Returns:
+        :class:`~fastapi.responses.StreamingResponse` with the
+        ``text/event-stream`` media type.
+    """
+    t_start = time.monotonic()
+    stage_ms: dict[str, float] = {}
+    retrieve_timings: dict[str, float] = {}
+
+    search_results = await _embed_and_retrieve(request, stage_ms, retrieve_timings)
+
+    if not search_results:
+        return StreamingResponse(
+            _stream_no_context(t_start, stage_ms, request),
+            media_type="text/event-stream",
+            headers=_SSE_HEADERS,
+        )
+
+    prompt = build_rag_prompt(
+        question=request.question,
+        context_passages=[
+            {"id": result.chunk_id, "content": result.content} for result in search_results
+        ],
+    )
+
+    return StreamingResponse(
+        _stream_answer(t_start, stage_ms, request, search_results, prompt),
+        media_type="text/event-stream",
+        headers=_SSE_HEADERS,
+    )
+
+
+async def _embed_and_retrieve(
+    request: QueryRequest,
+    stage_ms: dict[str, float],
+    retrieve_timings: dict[str, float],
+) -> list[SearchResult]:
+    """Run pipeline steps 1-2: embed the question, retrieve passages.
+
+    Shared by the ``/query`` and ``/query/stream`` endpoints.  Per-stage
+    latencies are recorded into *stage_ms*; *retrieve_timings* receives the
+    hybrid-search / re-rank split from :func:`app.retrieval.rerank.retrieve`.
+
+    Raises:
+        HTTPException 502: If the embedding provider call fails.
+        HTTPException 503: If the vector store is unavailable.
+    """
     # ------------------------------------------------------------------
     # 1. Embed the question
     # ------------------------------------------------------------------
@@ -191,68 +323,15 @@ async def query(request: QueryRequest) -> QueryResponse:
             status_code=503,
             detail=f"Vector store error: {exc}",
         ) from exc
+
     stage_ms["retrieve"] = retrieve_timings.get("hybrid_search_ms", 0.0)
     stage_ms["rerank"] = retrieve_timings.get("rerank_ms", 0.0)
+    return search_results
 
-    # ------------------------------------------------------------------
-    # 3. Build the RAG prompt
-    # ------------------------------------------------------------------
-    if not search_results:
-        # No relevant passages found — return a graceful "no context" answer.
-        total_ms = _elapsed_ms(t_start)
-        _log_query(
-            stage_ms=stage_ms,
-            result_count=0,
-            total_ms=total_ms,
-            game_slug=request.game_slug,
-            top_k=request.top_k,
-        )
-        return QueryResponse(
-            answer="I don't know — this information is not available in the provided sources.",
-            sources=[],
-            latency_ms=total_ms,
-        )
 
-    context_passages = [
-        {
-            "id": result.chunk_id,
-            "content": result.content,
-        }
-        for result in search_results
-    ]
-    prompt = build_rag_prompt(
-        question=request.question,
-        context_passages=context_passages,
-    )
-
-    # ------------------------------------------------------------------
-    # 4. Generate an answer
-    # ------------------------------------------------------------------
-    llm = get_llm_provider()
-    t_stage = time.monotonic()
-    try:
-        answer = await llm.generate(prompt)
-    except LLMError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"LLM provider error: {exc}",
-        ) from exc
-    stage_ms["generate"] = _elapsed_ms(t_stage)
-
-    # ------------------------------------------------------------------
-    # 5. Build response with sources
-    # ------------------------------------------------------------------
-    total_ms = _elapsed_ms(t_start)
-
-    _log_query(
-        stage_ms=stage_ms,
-        result_count=len(search_results),
-        total_ms=total_ms,
-        game_slug=request.game_slug,
-        top_k=request.top_k,
-    )
-
-    sources = [
+def _build_sources(search_results: list[SearchResult]) -> list[SourceDoc]:
+    """Map retrieval results to the wire-format :class:`SourceDoc` list."""
+    return [
         SourceDoc(
             id=result.chunk_id,
             title=str(result.payload.get("title", result.payload.get("source", ""))),
@@ -263,11 +342,94 @@ async def query(request: QueryRequest) -> QueryResponse:
         for result in search_results
     ]
 
-    return QueryResponse(
-        answer=answer,
-        sources=sources,
-        latency_ms=round(total_ms, 2),
+
+#: Headers that keep SSE responses unbuffered end-to-end (nginx etc.).
+_SSE_HEADERS = {
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no",
+}
+
+
+def _sse_event(event: str, data: dict[str, Any]) -> str:
+    """Format one Server-Sent Event frame (``event:`` + single-line JSON)."""
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+async def _stream_no_context(
+    t_start: float,
+    stage_ms: dict[str, float],
+    request: QueryRequest,
+) -> AsyncIterator[str]:
+    """SSE generator for a question with no retrieved context."""
+    yield _sse_event("meta", {"sources": []})
+
+    answer = "I don't know — this information is not available in the provided sources."
+    yield _sse_event("token", {"text": answer})
+
+    total_ms = _elapsed_ms(t_start)
+    _log_query(
+        stage_ms=stage_ms,
+        result_count=0,
+        total_ms=total_ms,
+        game_slug=request.game_slug,
+        top_k=request.top_k,
+        streamed=True,
+        chunk_count=1,
     )
+    yield _sse_event("done", {"latency_ms": round(total_ms, 2)})
+
+
+async def _stream_answer(
+    t_start: float,
+    stage_ms: dict[str, float],
+    request: QueryRequest,
+    search_results: list[SearchResult],
+    prompt: str,
+) -> AsyncIterator[str]:
+    """SSE generator: metadata first, then answer tokens as they arrive."""
+    sources = _build_sources(search_results)
+    yield _sse_event("meta", {"sources": [source.model_dump() for source in sources]})
+
+    llm = get_llm_provider()
+    chunk_count = 0
+    t_stage = time.monotonic()
+    try:
+        async for chunk in llm.generate_stream(prompt):
+            if not chunk:
+                continue
+            chunk_count += 1
+            yield _sse_event("token", {"text": chunk})
+    except LLMError as exc:
+        stage_ms["generate"] = _elapsed_ms(t_stage)
+        _log_query(
+            stage_ms=stage_ms,
+            result_count=len(search_results),
+            total_ms=_elapsed_ms(t_start),
+            game_slug=request.game_slug,
+            top_k=request.top_k,
+            streamed=True,
+            chunk_count=chunk_count,
+        )
+        logger.warning("query_stream_failed", extra={"error": str(exc)})
+        yield _sse_event(
+            "error",
+            {"code": "LLM_ERROR", "message": f"LLM provider error: {exc}"},
+        )
+        return
+
+    stage_ms["generate"] = _elapsed_ms(t_stage)
+    total_ms = _elapsed_ms(t_start)
+    _log_query(
+        stage_ms=stage_ms,
+        result_count=len(search_results),
+        total_ms=total_ms,
+        game_slug=request.game_slug,
+        top_k=request.top_k,
+        streamed=True,
+        chunk_count=chunk_count,
+    )
+    yield _sse_event("done", {"latency_ms": round(total_ms, 2)})
 
 
 def _elapsed_ms(start: float) -> float:
@@ -282,15 +444,19 @@ def _log_query(
     total_ms: float,
     game_slug: str | None,
     top_k: int | None,
+    streamed: bool = False,
+    chunk_count: int | None = None,
 ) -> None:
     """Emit one structured ``query`` event with per-stage latencies (#24)."""
-    logger.info(
-        "query",
-        extra={
-            "stage_ms": {stage: round(value, 2) for stage, value in stage_ms.items()},
-            "result_count": result_count,
-            "total_ms": round(total_ms, 2),
-            "game_slug": game_slug,
-            "top_k": top_k,
-        },
-    )
+    extra: dict[str, Any] = {
+        "stage_ms": {stage: round(value, 2) for stage, value in stage_ms.items()},
+        "result_count": result_count,
+        "total_ms": round(total_ms, 2),
+        "game_slug": game_slug,
+        "top_k": top_k,
+        "streamed": streamed,
+    }
+    if chunk_count is not None:
+        extra["chunk_count"] = chunk_count
+
+    logger.info("query", extra=extra)
