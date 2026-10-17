@@ -79,3 +79,42 @@ ADR 0001 includes cross-encoder re-ranking after hybrid retrieval. The standard 
 - Container/CI images stay lightweight (ONNX Runtime ~24 MB vs PyTorch ~1 GB).
 - First request after a restart downloads the model (~90 MB) unless the cache volume is warm.
 - **Pending:** eval rerun for accuracy/latency numbers requires a valid `GOOGLE_API_KEY` (same blocker as ADR 0002).
+
+---
+
+## ADR 0004: Chunking Strategy — 800 Characters / 120 Overlap
+
+- **Status:** Accepted (offline sweep; credentialed confirmation pending)
+- **Date:** 2026-10-17
+- **Issue:** #22
+
+### Context
+Issue #22 compares chunk sizes (400/800/1200) and overlap values by evaluation and picks the best configuration. The credentialed end-to-end evaluation (Gemini embeddings + LLM answers) is still blocked by the missing `GOOGLE_API_KEY`, so the sweep was run with the retrieval-only offline harness (`eval/retrieval_eval.py`): the **real** ingestion + hybrid retrieval stack (chunking → BM25 → dense retrieval → RRF) against a scratch Qdrant collection, local ONNX embeddings (`BAAI/bge-small-en-v1.5`), re-ranking disabled so chunking effects are not masked by the cross-encoder, all 70 dataset questions, `top_k=5`.
+
+### Sweep results (offline proxy, 2026-10-17)
+
+| Chunk size | Overlap | Chunks | Hit Rate@5 | MRR | Mean retrieval ms | p95 ms |
+|---|---|---|---|---|---|---|
+| 400 | 0 | 75 | 100.0% | 0.989 | 18 | 23 |
+| 400 | 100 | 97 | 100.0% | 0.982 | 17 | 20 |
+| 400 | 120 | 100 | 100.0% | 0.982 | 18 | 23 |
+| **800** | **0** | **33** | **100.0%** | **1.000** | **18** | **22** |
+| **800** | **100** | **38** | **100.0%** | **1.000** | **21** | **26** |
+| 800 | 120 | 38 | 100.0% | 0.992 | 22 | 30 |
+| 1200 | 0 | 23 | 100.0% | 0.992 | 20 | 26 |
+| 1200 | 100 | 25 | 100.0% | 0.992 | 23 | 32 |
+| 1200 | 120 | 25 | 100.0% | 0.992 | 20 | 26 |
+
+Reproduce with:
+`docker compose exec ai-service python /eval/retrieval_eval.py --sweep-sizes 400,800,1200 --sweep-overlaps 0,100,120 --embedder fastembed --fastembed-cache /data/fastembed_cache --no-rerank --label chunking-sweep`
+
+### Decision
+1. Keep the **`CHUNK_SIZE=800`, `CHUNK_OVERLAP=120`** defaults.
+2. 800-char chunks lead on MRR (1.000/0.992 vs 0.982–0.992 for 400/1200); 400/1200 occasionally push an answer document from rank 1 to rank 2.
+3. Overlap is within noise at 800 chars (0/100/120 differ by a single question's rank), so there is no evidence to move away from the current 120 default.
+4. Hit Rate@5 is 100% for every configuration — the curated corpus (six short manuals) is too small to separate recall at top-5, so this sweep only *weakens* hypotheses (400 and 1200 are not better) rather than proving an optimum.
+
+### Consequences
+- Chunk size/overlap stay configurable via `CHUNK_SIZE`/`CHUNK_OVERLAP`; re-run the sweep when the corpus grows.
+- The offline proxy uses local `bge-small` embeddings, not the production Gemini model, and retrieval only (no answers) — treat it as directional evidence.
+- **Pending:** credentialed end-to-end rerun to confirm the pick and record answer-quality metrics (same blocker as ADR 0002/0003).

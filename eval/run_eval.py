@@ -612,6 +612,57 @@ def write_reports(
 
 
 # ---------------------------------------------------------------------------
+# Quality guards (Issue #23)
+# ---------------------------------------------------------------------------
+
+
+def check_quality_guards(
+    metrics: dict[str, Any],
+    *,
+    min_hit_rate: float | None = None,
+    baseline_path: Path | None = None,
+    max_hit_rate_drop: float = DEFAULT_MAX_HIT_RATE_DROP,
+) -> list[str]:
+    """Evaluate the configured Hit Rate guards against *metrics*.
+
+    Args:
+        metrics:           Aggregate metrics (as returned by :func:`aggregate`).
+        min_hit_rate:      Absolute floor; fail when Hit Rate is below it.
+        baseline_path:     Previous JSON report to compare against.
+        max_hit_rate_drop: Allowed Hit Rate drop vs. the baseline (0–1).
+
+    Returns:
+        Human-readable failure messages; empty when every guard passes.  An
+        unreadable baseline file is skipped with a warning (never a failure)
+        so a deleted baseline cannot break CI by accident.
+    """
+    failures: list[str] = []
+    hit_rate = metrics.get("hit_rate")
+    if hit_rate is None:
+        return failures
+
+    if min_hit_rate is not None and hit_rate < min_hit_rate:
+        failures.append(f"Hit Rate {hit_rate:.3f} is below the required {min_hit_rate:.3f}")
+
+    if baseline_path is not None:
+        try:
+            baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+            baseline_rate = baseline.get("metrics", {}).get("hit_rate")
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"WARNING: cannot read baseline {baseline_path}: {exc}", file=sys.stderr)
+            baseline_rate = None
+        if baseline_rate is not None:
+            drop = float(baseline_rate) - float(hit_rate)
+            if drop > max_hit_rate_drop:
+                failures.append(
+                    f"Hit Rate dropped {drop:.3f} vs. baseline "
+                    f"({float(baseline_rate):.3f} → {float(hit_rate):.3f}), "
+                    f"allowed {max_hit_rate_drop:.3f}"
+                )
+    return failures
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -740,28 +791,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     # ------------------------------------------------------------------
     # Quality guards (Issue #23 regression guard)
     # ------------------------------------------------------------------
-    guard_failures: list[str] = []
-    if args.min_hit_rate is not None and metrics["hit_rate"] is not None:
-        if metrics["hit_rate"] < args.min_hit_rate:
-            guard_failures.append(
-                f"Hit Rate {metrics['hit_rate']:.3f} is below the required "
-                f"{args.min_hit_rate:.3f}"
-            )
-    if args.baseline is not None and metrics["hit_rate"] is not None:
-        try:
-            baseline = json.loads(args.baseline.read_text(encoding="utf-8"))
-            baseline_rate = baseline.get("metrics", {}).get("hit_rate")
-        except (OSError, json.JSONDecodeError) as exc:
-            print(f"WARNING: cannot read baseline {args.baseline}: {exc}", file=sys.stderr)
-            baseline_rate = None
-        if baseline_rate is not None:
-            drop = float(baseline_rate) - metrics["hit_rate"]
-            if drop > args.max_hit_rate_drop:
-                guard_failures.append(
-                    f"Hit Rate dropped {drop:.3f} vs. baseline "
-                    f"({baseline_rate:.3f} → {metrics['hit_rate']:.3f}), "
-                    f"allowed {args.max_hit_rate_drop:.3f}"
-                )
+    guard_failures = check_quality_guards(
+        metrics,
+        min_hit_rate=args.min_hit_rate,
+        baseline_path=args.baseline,
+        max_hit_rate_drop=args.max_hit_rate_drop,
+    )
     if guard_failures:
         for failure in guard_failures:
             print(f"GUARD FAILED: {failure}", file=sys.stderr)
