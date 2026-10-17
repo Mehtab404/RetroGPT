@@ -9,6 +9,7 @@ from app.ingestion.embeddings import (
     get_embedding_provider,
 )
 from app.ingestion.loaders import Document, MarkdownLoader, TextLoader, get_loader_for
+from app.ingestion.pipeline import IngestionPipeline, IngestionResult
 
 __all__ = [
     # Loaders
@@ -25,4 +26,7 @@ __all__ = [
     "GeminiEmbedding",
     "OpenAIEmbedding",
     "get_embedding_provider",
+    # Pipeline
+    "IngestionPipeline",
+    "IngestionResult",
 ]
