@@ -16,6 +16,12 @@ ignore = [
     "E501",  # line too long (handled by black)
 ]
 
+[tool.ruff.lint.isort]
+# `app` is this package; eval/ and scripts/ import it directly, so pin the
+# classification regardless of the directory ruff is invoked from (CI lints
+# `eval` from the repo root with this config).
+known-first-party = ["app"]
+
 [tool.black]
 line-length = 100
 target-version = ["py312"]
