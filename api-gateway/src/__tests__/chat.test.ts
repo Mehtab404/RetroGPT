@@ -11,6 +11,7 @@ import app from '../app';
 import * as aiClient from '../services/aiClient';
 import * as cache from '../services/cache';
 import { logger } from '../utils/logger';
+import { Session } from '../models/session';
 
 // Mock Session model so no real MongoDB calls are made in chat tests
 jest.mock('../models/session', () => ({
@@ -380,6 +381,229 @@ describe('POST /api/chat', () => {
       await request(app).post('/api/chat').set('x-api-key', API_KEY).send({ question: 'AB' });
 
       expect(getCacheSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Conversation history (Issue #27)
+  // -------------------------------------------------------------------------
+
+  describe('conversation history', () => {
+    const SESSION_ID = '550e8400-e29b-41d4-a716-446655440000';
+
+    /** Build a stored-session message fixture. */
+    function storedMessage(role: 'user' | 'assistant', content: string) {
+      return { role, content, createdAt: new Date() };
+    }
+
+    beforeEach(() => {
+      // Default: the session does not exist → no history.
+      (Session.findOne as unknown as jest.Mock).mockResolvedValue(null);
+    });
+
+    it('loads the stored session history server-side and forwards it', async () => {
+      (Session.findOne as unknown as jest.Mock).mockResolvedValue({
+        messages: [
+          storedMessage('user', 'How do you score in Asteroids?'),
+          storedMessage('assistant', 'Destroy asteroids for points [1].'),
+        ],
+      });
+
+      await request(app)
+        .post('/api/chat')
+        .set('x-api-key', API_KEY)
+        .send({ question: 'What about the saucer?', sessionId: SESSION_ID });
+
+      expect(Session.findOne).toHaveBeenCalledWith({ sessionId: SESSION_ID });
+      expect(querySpy).toHaveBeenCalledWith(
+        {
+          question: 'What about the saucer?',
+          history: [
+            { role: 'user', content: 'How do you score in Asteroids?' },
+            { role: 'assistant', content: 'Destroy asteroids for points [1].' },
+          ],
+        },
+        expect.any(String),
+      );
+    });
+
+    it('forwards only the last six messages, oldest first', async () => {
+      const messages = Array.from({ length: 8 }, (_, i) =>
+        storedMessage(i % 2 === 0 ? 'user' : 'assistant', `message ${i + 1}`),
+      );
+      (Session.findOne as unknown as jest.Mock).mockResolvedValue({ messages });
+
+      await request(app)
+        .post('/api/chat')
+        .set('x-api-key', API_KEY)
+        .send({ question: 'What about the saucer?', sessionId: SESSION_ID });
+
+      const [aiRequest] = querySpy.mock.calls[0];
+      expect(aiRequest.history).toEqual([
+        { role: 'user', content: 'message 3' },
+        { role: 'assistant', content: 'message 4' },
+        { role: 'user', content: 'message 5' },
+        { role: 'assistant', content: 'message 6' },
+        { role: 'user', content: 'message 7' },
+        { role: 'assistant', content: 'message 8' },
+      ]);
+    });
+
+    it('applies the character cap, preferring the newest messages', async () => {
+      const halfCap = 'a'.repeat(2000);
+      (Session.findOne as unknown as jest.Mock).mockResolvedValue({
+        messages: [
+          storedMessage('user', halfCap),
+          storedMessage('assistant', halfCap),
+          storedMessage('user', 'newest question'),
+        ],
+      });
+
+      await request(app)
+        .post('/api/chat')
+        .set('x-api-key', API_KEY)
+        .send({ question: 'What about the saucer?', sessionId: SESSION_ID });
+
+      const [aiRequest] = querySpy.mock.calls[0];
+      expect(aiRequest.history).toEqual([
+        { role: 'assistant', content: halfCap },
+        { role: 'user', content: 'newest question' },
+      ]);
+    });
+
+    it('proceeds without history when the session does not exist', async () => {
+      await request(app)
+        .post('/api/chat')
+        .set('x-api-key', API_KEY)
+        .send({ question: 'What about the saucer?', sessionId: SESSION_ID });
+
+      expect(querySpy).toHaveBeenCalledWith(
+        { question: 'What about the saucer?' },
+        expect.any(String),
+      );
+    });
+
+    it('proceeds without history when the session has no messages', async () => {
+      (Session.findOne as unknown as jest.Mock).mockResolvedValue({ messages: [] });
+
+      await request(app)
+        .post('/api/chat')
+        .set('x-api-key', API_KEY)
+        .send({ question: 'What about the saucer?', sessionId: SESSION_ID });
+
+      expect(querySpy).toHaveBeenCalledWith(
+        { question: 'What about the saucer?' },
+        expect.any(String),
+      );
+    });
+
+    it('fails open (200, no history) when the session lookup throws', async () => {
+      (Session.findOne as unknown as jest.Mock).mockRejectedValue(new Error('mongo down'));
+      const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+
+      const res = await request(app)
+        .post('/api/chat')
+        .set('x-api-key', API_KEY)
+        .set('x-request-id', 'trace-history-1')
+        .send({ question: 'What about the saucer?', sessionId: SESSION_ID });
+
+      expect(res.status).toBe(200);
+      expect(querySpy).toHaveBeenCalledWith(
+        { question: 'What about the saucer?' },
+        expect.any(String),
+      );
+      expect(warnSpy).toHaveBeenCalledWith(
+        'session_history_load_failed',
+        expect.objectContaining({
+          request_id: 'trace-history-1',
+          session_id: SESSION_ID,
+          error: expect.any(Error),
+        }),
+      );
+    });
+
+    it('does not query sessions when no sessionId is provided', async () => {
+      await request(app)
+        .post('/api/chat')
+        .set('x-api-key', API_KEY)
+        .send({ question: 'What about the saucer?' });
+
+      expect(Session.findOne).not.toHaveBeenCalled();
+    });
+
+    it('ignores browser-supplied history in the request body', async () => {
+      await request(app)
+        .post('/api/chat')
+        .set('x-api-key', API_KEY)
+        .send({
+          question: 'What about the saucer?',
+          sessionId: SESSION_ID,
+          history: [{ role: 'user', content: 'BROWSER-SUPPLIED HISTORY' }],
+        });
+
+      // The stored session does not exist → no history is forwarded even
+      // though the browser sent some.
+      expect(querySpy).toHaveBeenCalledWith(
+        { question: 'What about the saucer?' },
+        expect.any(String),
+      );
+    });
+
+    it('uses a history-aware cache key when history is present', async () => {
+      (Session.findOne as unknown as jest.Mock).mockResolvedValue({
+        messages: [storedMessage('user', 'How do you score in Asteroids?')],
+      });
+      getCacheSpy.mockResolvedValue(null);
+
+      const question = 'What about the saucer?';
+      await request(app)
+        .post('/api/chat')
+        .set('x-api-key', API_KEY)
+        .send({ question, sessionId: SESSION_ID });
+
+      const expectedHistory = [{ role: 'user', content: 'How do you score in Asteroids?' }];
+      expect(getCacheSpy).toHaveBeenCalledWith(question, expectedHistory);
+      expect(setCacheSpy).toHaveBeenCalledWith(
+        question,
+        expect.objectContaining({ answer: expect.any(String) }),
+        undefined,
+        expectedHistory,
+      );
+    });
+
+    it('keeps the legacy cache call shape when no history is present', async () => {
+      const question = 'How do you score in Asteroids?';
+      await request(app).post('/api/chat').set('x-api-key', API_KEY).send({ question });
+
+      expect(getCacheSpy).toHaveBeenCalledWith(question);
+      expect(setCacheSpy).toHaveBeenCalledWith(
+        question,
+        expect.objectContaining({ answer: expect.any(String) }),
+      );
+    });
+
+    it('replays a history-aware cache hit without calling the AI service', async () => {
+      (Session.findOne as unknown as jest.Mock).mockResolvedValue({
+        messages: [storedMessage('user', 'How do you score in Asteroids?')],
+      });
+      getCacheSpy.mockResolvedValue({
+        answer: 'Cached follow-up answer.',
+        sources: [],
+        latency_ms: 25,
+      });
+
+      const question = 'What about the saucer?';
+      const res = await request(app)
+        .post('/api/chat')
+        .set('x-api-key', API_KEY)
+        .send({ question, sessionId: SESSION_ID });
+
+      expect(res.status).toBe(200);
+      expect(res.body.cached).toBe(true);
+      expect(querySpy).not.toHaveBeenCalled();
+      expect(getCacheSpy).toHaveBeenCalledWith(question, [
+        { role: 'user', content: 'How do you score in Asteroids?' },
+      ]);
     });
   });
 

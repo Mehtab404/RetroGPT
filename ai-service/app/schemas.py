@@ -3,6 +3,7 @@
 Defines the wire-format schemas used by the ``POST /query`` endpoint:
 
 * :class:`QueryRequest`  — incoming query from the API gateway.
+* :class:`HistoryMessage` — one prior conversation turn (Issue #27).
 * :class:`SourceDoc`     — a single retrieved source document / passage.
 * :class:`QueryResponse` — the generated answer with sources and metadata.
 
@@ -12,13 +13,49 @@ integration errors early.
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+# ---------------------------------------------------------------------------
+# History bounds (mirrored by api-gateway/src/services/history.ts)
+# ---------------------------------------------------------------------------
+
+#: Maximum number of prior messages accepted (Issue #27).
+HISTORY_MAX_MESSAGES: int = 6
+
+#: Maximum total characters across the prior conversation (Issue #27).
+HISTORY_MAX_CHARS: int = 4000
 
 # ---------------------------------------------------------------------------
 # Request model
 # ---------------------------------------------------------------------------
+
+
+class HistoryMessage(BaseModel):
+    """One prior conversation turn supplied by the API gateway (Issue #27).
+
+    History is context for interpreting the current question only; it is
+    never treated as factual evidence and never cited.
+
+    Attributes:
+        role:    Who authored the turn (``"user"`` or ``"assistant"``).
+        content: Text of the turn.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    role: Annotated[
+        Literal["user", "assistant"],
+        Field(description="Author of this prior turn."),
+    ]
+    content: Annotated[
+        str,
+        Field(
+            max_length=HISTORY_MAX_CHARS,
+            description="Text of the prior turn.",
+        ),
+    ]
 
 
 class QueryRequest(BaseModel):
@@ -31,6 +68,8 @@ class QueryRequest(BaseModel):
                    Defaults to 5; capped at 20 to avoid overly long prompts.
         game_slug: Optional filter to restrict retrieval to a specific game's
                    documents (e.g. ``"asteroids"``, ``"pong"``).
+        history:   Optional bounded prior conversation (oldest first) used
+                   only to interpret the current question (Issue #27).
     """
 
     model_config = {"extra": "forbid"}
@@ -61,6 +100,25 @@ class QueryRequest(BaseModel):
             examples=["asteroids", "pong"],
         ),
     ] = None
+    history: Annotated[
+        list[HistoryMessage] | None,
+        Field(
+            default=None,
+            max_length=HISTORY_MAX_MESSAGES,
+            description=("Bounded prior conversation (oldest first) for follow-up context."),
+        ),
+    ] = None
+
+    @model_validator(mode="after")
+    def _validate_history_char_budget(self) -> QueryRequest:
+        """Reject histories whose contents exceed ``HISTORY_MAX_CHARS``."""
+        if self.history:
+            total_chars = sum(len(message.content) for message in self.history)
+            if total_chars > HISTORY_MAX_CHARS:
+                raise ValueError(
+                    f"history content must total at most {HISTORY_MAX_CHARS} characters"
+                )
+        return self
 
 
 # ---------------------------------------------------------------------------

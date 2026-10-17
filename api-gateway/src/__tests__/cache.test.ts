@@ -17,6 +17,7 @@ import {
 } from '../services/cache';
 import { RedisClientType } from 'redis';
 import { logger } from '../utils/logger';
+import { type HistoryMessage } from '../services/history';
 
 // ---------------------------------------------------------------------------
 // Mock the entire `redis` package so no real TCP connections are attempted.
@@ -70,6 +71,12 @@ function makeMockClient(
   } as unknown as RedisClientType;
 }
 
+/** Minimal bounded conversation fixture (Issue #27). */
+const HISTORY: HistoryMessage[] = [
+  { role: 'user', content: 'How do you score in Asteroids?' },
+  { role: 'assistant', content: 'Destroy asteroids for points [1].' },
+];
+
 // ---------------------------------------------------------------------------
 // buildCacheKey
 // ---------------------------------------------------------------------------
@@ -97,6 +104,60 @@ describe('buildCacheKey()', () => {
 
   it('different questions produce different keys', () => {
     expect(buildCacheKey('Asteroids')).not.toBe(buildCacheKey('Pong'));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildCacheKey with conversation history (Issue #27)
+// ---------------------------------------------------------------------------
+
+describe('buildCacheKey() with conversation history', () => {
+  it('keeps the exact legacy key when history is empty', () => {
+    const question = 'How do you score in Asteroids?';
+    expect(buildCacheKey(question, [])).toBe(buildCacheKey(question));
+  });
+
+  it('appends an order-sensitive history fingerprint', () => {
+    const key = buildCacheKey('What about the saucer?', HISTORY);
+    expect(key).toMatch(/^retrogpt:chat:[0-9a-f]{64}:h:[0-9a-f]{64}$/);
+  });
+
+  it('differs from the no-history key for the same question', () => {
+    const question = 'What about the saucer?';
+    expect(buildCacheKey(question, HISTORY)).not.toBe(buildCacheKey(question));
+  });
+
+  it('different message contents produce different keys', () => {
+    const other: HistoryMessage[] = [{ role: 'user', content: 'How do you score in Pong?' }];
+    expect(buildCacheKey('What about the saucer?', [HISTORY[0]])).not.toBe(
+      buildCacheKey('What about the saucer?', other),
+    );
+  });
+
+  it('different roles produce different keys', () => {
+    const userMessage: HistoryMessage[] = [{ role: 'user', content: 'same text' }];
+    const assistantMessage: HistoryMessage[] = [{ role: 'assistant', content: 'same text' }];
+    expect(buildCacheKey('q?', userMessage)).not.toBe(buildCacheKey('q?', assistantMessage));
+  });
+
+  it('different message order produces different keys', () => {
+    const reversed = [...HISTORY].reverse();
+    expect(buildCacheKey('What about the saucer?', HISTORY)).not.toBe(
+      buildCacheKey('What about the saucer?', reversed),
+    );
+  });
+
+  it('identical histories produce deterministic keys', () => {
+    const clone = HISTORY.map((message) => ({ ...message }));
+    expect(buildCacheKey('What about the saucer?', HISTORY)).toBe(
+      buildCacheKey('What about the saucer?', clone),
+    );
+  });
+
+  it('different questions under the same history produce different keys', () => {
+    expect(buildCacheKey('What about the saucer?', HISTORY)).not.toBe(
+      buildCacheKey('What about the UFO?', HISTORY),
+    );
   });
 });
 
@@ -170,6 +231,15 @@ describe('getCachedResponse()', () => {
     const expectedKey = buildCacheKey('asteroids');
     expect(mockGet).toHaveBeenCalledWith(expectedKey);
   });
+
+  it('looks up the history-aware key when history is provided', async () => {
+    const mockGet = jest.fn().mockResolvedValue(null);
+    setRedisClient(makeMockClient({ get: mockGet }));
+
+    await getCachedResponse('What about the saucer?', HISTORY);
+
+    expect(mockGet).toHaveBeenCalledWith(buildCacheKey('What about the saucer?', HISTORY));
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -224,6 +294,20 @@ describe('setCachedResponse()', () => {
     ).resolves.toBeUndefined();
     expect(errorSpy).toHaveBeenCalledWith('cache_write_failed', { error: expect.any(Error) });
     errorSpy.mockRestore();
+  });
+
+  it('stores under the history-aware key when history is provided', async () => {
+    const mockSet = jest.fn().mockResolvedValue('OK');
+    setRedisClient(makeMockClient({ set: mockSet }));
+
+    const payload = makeCachedResponse();
+    await setCachedResponse('What about the saucer?', payload, 3600, HISTORY);
+
+    expect(mockSet).toHaveBeenCalledWith(
+      buildCacheKey('What about the saucer?', HISTORY),
+      JSON.stringify(payload),
+      { EX: 3600 },
+    );
   });
 });
 

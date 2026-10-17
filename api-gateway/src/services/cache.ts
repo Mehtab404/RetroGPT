@@ -2,7 +2,9 @@
  * Redis response cache for RetroGPT.
  *
  * Caches AI service responses keyed by a SHA-256 hash of the normalised
- * question text, with a configurable TTL (default 24 h).
+ * question text, with a configurable TTL (default 24 h).  History-aware
+ * requests (Issue #27) append an order-sensitive fingerprint of the bounded
+ * conversation so a follow-up never collides with a stateless ask.
  *
  * Design choices:
  * - Cache errors are logged but never re-thrown so a Redis outage does NOT
@@ -18,6 +20,7 @@ import { createClient, RedisClientType } from 'redis';
 import { createHash } from 'crypto';
 import { config } from '../config';
 import { logger } from '../utils/logger';
+import { serializeHistory, type HistoryMessage } from './history';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -101,13 +104,27 @@ export function setRedisClient(client: RedisClientType | null): void {
  * superficially different but semantically identical questions map to the
  * same bucket.
  *
+ * Since Issue #27 a bounded conversation history may accompany the question.
+ * When it is non-empty, an order-sensitive fingerprint of the roles and
+ * contents is appended, so different conversations asking the same follow-up
+ * never share a cached answer.  Requests without history keep the exact
+ * legacy key.
+ *
  * @param question - Raw question text from the request body.
- * @returns A `retrogpt:chat:<sha256hex>` string.
+ * @param history  - Bounded prior conversation (empty = stateless request).
+ * @returns A `retrogpt:chat:<sha256hex>` string, optionally followed by
+ *          `:h:<sha256hex>` for history-aware requests.
  */
-export function buildCacheKey(question: string): string {
+export function buildCacheKey(question: string, history: HistoryMessage[] = []): string {
   const normalised = question.trim().toLowerCase();
   const hash = createHash('sha256').update(normalised, 'utf8').digest('hex');
-  return `retrogpt:chat:${hash}`;
+
+  if (history.length === 0) {
+    return `retrogpt:chat:${hash}`;
+  }
+
+  const fingerprint = createHash('sha256').update(serializeHistory(history), 'utf8').digest('hex');
+  return `retrogpt:chat:${hash}:h:${fingerprint}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -117,14 +134,20 @@ export function buildCacheKey(question: string): string {
 /**
  * Attempt to retrieve a cached response for the given question.
  *
+ * @param question - Raw question text from the request body.
+ * @param history  - Bounded prior conversation; only the latest question in
+ *                   the same conversation resolves to the same key.
  * @returns The parsed {@link CachedResponse} on a hit, or `null` on a miss
  *          or any Redis error.
  */
-export async function getCachedResponse(question: string): Promise<CachedResponse | null> {
+export async function getCachedResponse(
+  question: string,
+  history: HistoryMessage[] = [],
+): Promise<CachedResponse | null> {
   const client = await getRedisClient();
   if (client === null) return null;
 
-  const key = buildCacheKey(question);
+  const key = buildCacheKey(question, history);
 
   try {
     const raw = await client.get(key);
@@ -141,19 +164,21 @@ export async function getCachedResponse(question: string): Promise<CachedRespons
  *
  * Errors are silently logged; cache failures never propagate to callers.
  *
- * @param question  - The original question (will be normalised internally).
- * @param response  - The payload to cache.
+ * @param question   - The original question (will be normalised internally).
+ * @param response   - The payload to cache.
  * @param ttlSeconds - Time-to-live in seconds (defaults to `config.cacheTtlSeconds`).
+ * @param history    - Bounded prior conversation (empty = stateless request).
  */
 export async function setCachedResponse(
   question: string,
   response: CachedResponse,
   ttlSeconds: number = config.cacheTtlSeconds,
+  history: HistoryMessage[] = [],
 ): Promise<void> {
   const client = await getRedisClient();
   if (client === null) return;
 
-  const key = buildCacheKey(question);
+  const key = buildCacheKey(question, history);
 
   try {
     await client.set(key, JSON.stringify(response), { EX: ttlSeconds });

@@ -124,7 +124,8 @@ async def query(request: QueryRequest) -> QueryResponse:
        search (dense + BM25 sparse fused via RRF) over a wide candidate
        pool, then cross-encoder re-ranking to the top-K.  Each stage fails
        open (dense-only, then hybrid order) when unavailable.
-    3. Build a RAG prompt from the retrieved context + question.
+    3. Build a RAG prompt from the retrieved context + question (plus the
+       bounded prior conversation when supplied — Issue #27).
     4. Generate an answer with the configured LLM provider.
     5. Return the answer with source citations and latency.
 
@@ -170,6 +171,7 @@ async def query(request: QueryRequest) -> QueryResponse:
         context_passages=[
             {"id": result.chunk_id, "content": result.content} for result in search_results
         ],
+        history=_history_payload(request),
     )
 
     # ------------------------------------------------------------------
@@ -249,6 +251,7 @@ async def query_stream(request: QueryRequest) -> StreamingResponse:
         context_passages=[
             {"id": result.chunk_id, "content": result.content} for result in search_results
         ],
+        history=_history_payload(request),
     )
 
     return StreamingResponse(
@@ -341,6 +344,13 @@ def _build_sources(search_results: list[SearchResult]) -> list[SourceDoc]:
         )
         for result in search_results
     ]
+
+
+def _history_payload(request: QueryRequest) -> list[dict[str, str]] | None:
+    """Map validated history models to the prompt-builder payload (Issue #27)."""
+    if not request.history:
+        return None
+    return [{"role": message.role, "content": message.content} for message in request.history]
 
 
 #: Headers that keep SSE responses unbuffered end-to-end (nginx etc.).
