@@ -1,0 +1,277 @@
+{
+  "label": "ci-offline",
+  "generated_at": "2026-10-17 11:56:43 UTC",
+  "mode": "retrieval-only",
+  "config": {
+    "chunk_size": 800,
+    "chunk_overlap": 120,
+    "chunks": 38,
+    "embedder": "hashing",
+    "dim": 768,
+    "rerank_enabled": false,
+    "top_k": 5,
+    "collection": "retrogpt_eval"
+  },
+  "dataset": "/eval/dataset.jsonl",
+  "top_k": 5,
+  "metrics": {
+    "hit_rate": 1.0,
+    "mrr": 1.0,
+    "refusal_accuracy": null,
+    "counts": {
+      "total": 10,
+      "evaluated": 10,
+      "answerable": 9,
+      "unanswerable": 1,
+      "hits": 9,
+      "refusals": 0,
+      "errors": 0,
+      "top_k": 5
+    },
+    "latency_ms": {
+      "mean": 11.05,
+      "p50": 10.7,
+      "p95": 17.67
+    },
+    "per_category": {
+      "easy": {
+        "n": 5,
+        "hits": 5,
+        "hit_rate": 1.0,
+        "mrr": 1.0
+      },
+      "hard": {
+        "n": 3,
+        "hits": 3,
+        "hit_rate": 1.0,
+        "mrr": 1.0
+      },
+      "multi-hop": {
+        "n": 1,
+        "hits": 1,
+        "hit_rate": 1.0,
+        "mrr": 1.0
+      }
+    }
+  },
+  "results": [
+    {
+      "id": "ast-01",
+      "game": "asteroids",
+      "category": "easy",
+      "question": "How many points is a large asteroid worth in Asteroids?",
+      "expected_source_ids": [
+        "asteroids_manual"
+      ],
+      "retrieved_source_ids": [
+        "asteroids_manual",
+        "asteroids_manual",
+        "asteroids_manual",
+        "asteroids_manual",
+        "missile_command_manual"
+      ],
+      "answer": "",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 17.67,
+      "error": null
+    },
+    {
+      "id": "ast-02",
+      "game": "asteroids",
+      "category": "easy",
+      "question": "How many points do you get for destroying the small saucer in Asteroids?",
+      "expected_source_ids": [
+        "asteroids_manual"
+      ],
+      "retrieved_source_ids": [
+        "asteroids_manual",
+        "asteroids_manual",
+        "asteroids_manual",
+        "asteroids_manual",
+        "centipede_manual"
+      ],
+      "answer": "",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 11.23,
+      "error": null
+    },
+    {
+      "id": "ast-03",
+      "game": "asteroids",
+      "category": "easy",
+      "question": "How many ships (lives) do you start with in Asteroids?",
+      "expected_source_ids": [
+        "asteroids_manual"
+      ],
+      "retrieved_source_ids": [
+        "asteroids_manual",
+        "asteroids_manual",
+        "asteroids_manual",
+        "space_invaders_manual",
+        "asteroids_manual"
+      ],
+      "answer": "",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 11.16,
+      "error": null
+    },
+    {
+      "id": "ast-04",
+      "game": "asteroids",
+      "category": "easy",
+      "question": "What is the chance that your ship explodes when using hyperspace in Asteroids?",
+      "expected_source_ids": [
+        "asteroids_manual"
+      ],
+      "retrieved_source_ids": [
+        "asteroids_manual",
+        "asteroids_manual",
+        "asteroids_manual",
+        "centipede_manual",
+        "asteroids_manual"
+      ],
+      "answer": "",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 11.16,
+      "error": null
+    },
+    {
+      "id": "ast-05",
+      "game": "asteroids",
+      "category": "hard",
+      "question": "What does each asteroid size break into when destroyed in Asteroids?",
+      "expected_source_ids": [
+        "asteroids_manual"
+      ],
+      "retrieved_source_ids": [
+        "asteroids_manual",
+        "centipede_manual",
+        "missile_command_manual",
+        "breakout_manual",
+        "asteroids_manual"
+      ],
+      "answer": "",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 10.71,
+      "error": null
+    },
+    {
+      "id": "ast-06",
+      "game": "asteroids",
+      "category": "hard",
+      "question": "At how many points do you earn an extra ship in Asteroids?",
+      "expected_source_ids": [
+        "asteroids_manual"
+      ],
+      "retrieved_source_ids": [
+        "asteroids_manual",
+        "asteroids_manual",
+        "asteroids_manual",
+        "asteroids_manual",
+        "space_invaders_manual"
+      ],
+      "answer": "",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 10.0,
+      "error": null
+    },
+    {
+      "id": "ast-07",
+      "game": "asteroids",
+      "category": "multi-hop",
+      "question": "Compare the two flying saucers in Asteroids: which is worth more and which aims more accurately?",
+      "expected_source_ids": [
+        "asteroids_manual"
+      ],
+      "retrieved_source_ids": [
+        "asteroids_manual",
+        "asteroids_manual",
+        "asteroids_manual",
+        "breakout_manual",
+        "missile_command_manual"
+      ],
+      "answer": "",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 9.56,
+      "error": null
+    },
+    {
+      "id": "ast-08",
+      "game": "asteroids",
+      "category": "hard",
+      "question": "What happens when you clear all asteroids in Asteroids?",
+      "expected_source_ids": [
+        "asteroids_manual"
+      ],
+      "retrieved_source_ids": [
+        "asteroids_manual",
+        "asteroids_manual",
+        "asteroids_manual",
+        "asteroids_manual",
+        "breakout_manual"
+      ],
+      "answer": "",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 10.7,
+      "error": null
+    },
+    {
+      "id": "ast-09",
+      "game": "asteroids",
+      "category": "unanswerable",
+      "question": "What is the maximum possible score in Asteroids before the game ends?",
+      "expected_source_ids": [],
+      "retrieved_source_ids": [
+        "asteroids_manual",
+        "asteroids_manual",
+        "space_invaders_manual",
+        "centipede_manual",
+        "pacman_manual"
+      ],
+      "answer": "",
+      "hit": false,
+      "reciprocal_rank": 0.0,
+      "refused": false,
+      "latency_ms": 9.93,
+      "error": null
+    },
+    {
+      "id": "ast-10",
+      "game": "asteroids",
+      "category": "easy",
+      "question": "How many points is a small asteroid worth in Asteroids?",
+      "expected_source_ids": [
+        "asteroids_manual"
+      ],
+      "retrieved_source_ids": [
+        "asteroids_manual",
+        "asteroids_manual",
+        "asteroids_manual",
+        "asteroids_manual",
+        "missile_command_manual"
+      ],
+      "answer": "",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 8.33,
+      "error": null
+    }
+  ]
+}
