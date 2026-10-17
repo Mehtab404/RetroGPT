@@ -17,10 +17,16 @@ CMD ["npm", "run", "dev"]
 
 # ---------------------------------------------------------------------------
 # Build stage — compiles the static bundle.
+#
+# VITE_API_KEY is baked into the bundle at build time (public demo key, see
+# the note in src/api.ts); pass it with `--build-arg VITE_API_KEY=...`.
 # ---------------------------------------------------------------------------
 FROM node:20-alpine AS build
 
 WORKDIR /app
+
+ARG VITE_API_KEY=change-me
+ENV VITE_API_KEY=$VITE_API_KEY
 
 COPY package*.json ./
 RUN npm ci

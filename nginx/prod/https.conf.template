@@ -1,0 +1,100 @@
+# ---------------------------------------------------------------------------
+# RetroGPT production edge proxy — HTTPS (Issue #26).
+#
+# Use this template after deploy/init-letsencrypt.sh has issued a certificate
+# for ${DOMAIN} (certificates are mounted from ./deploy/certbot/conf):
+#
+#   NGINX_CONF_FILE=./nginx/prod/https.conf.template \
+#     docker compose -f docker-compose.prod.yml up -d nginx
+# ---------------------------------------------------------------------------
+
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+upstream frontend {
+    server frontend:80;
+}
+
+upstream api_gateway {
+    server api-gateway:4000;
+}
+
+server {
+    listen 80;
+    server_name ${DOMAIN};
+
+    # Let's Encrypt ACME HTTP-01 challenge (served from certbot's webroot).
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    # Everything else goes to HTTPS.
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name ${DOMAIN};
+
+    ssl_certificate     /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1d;
+
+    # Request body limit — the gateway enforces its own 1 MB limit too.
+    client_max_body_size 1m;
+
+    # Baseline security headers (HSTS only makes sense over HTTPS).
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options DENY always;
+    add_header Referrer-Policy strict-origin-when-cross-origin always;
+
+    gzip on;
+    gzip_types text/plain text/css application/json application/javascript image/svg+xml;
+
+    # --- API ---------------------------------------------------------------
+    # Server-Sent Events endpoint (Issue #25). Exact match so token frames
+    # are flushed to the client as they arrive instead of being buffered.
+    location = /api/chat/stream {
+        proxy_pass http://api_gateway;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 120s;
+        proxy_send_timeout 120s;
+    }
+
+    location /api/ {
+        proxy_pass http://api_gateway;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 60s;
+        proxy_send_timeout 60s;
+    }
+
+    # --- Frontend ----------------------------------------------------------
+    location / {
+        proxy_pass http://frontend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
