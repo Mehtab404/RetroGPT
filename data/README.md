@@ -7,13 +7,26 @@ This directory contains source documents and knowledge base materials for classi
 
 ## Sources & License Registry
 
-| Game | Title / Document | Source URL | Format | License / Terms | Notes |
+All game manuals are created based on publicly available information about classic arcade games. These documents are for educational and portfolio demonstration purposes under fair use.
+
+| Game | Document | Format | Date Added | Word Count | Notes |
 |---|---|---|---|---|---|
-| Asteroids | Atari Asteroids Operation & Service Manual | [Archive.org](https://archive.org/) | PDF/TXT | Public Domain / Fair Use (Vintage Manual) | Base gameplay rules & scoring |
-| Pong | Atari Pong Service Manual | [Archive.org](https://archive.org/) | PDF/TXT | Public Domain / Fair Use (Vintage Manual) | Controls & mechanics |
-| Centipede | Atari Centipede Game Manual | [Archive.org](https://archive.org/) | PDF/TXT | Public Domain / Fair Use (Vintage Manual) | Scoring & insect behavior |
-| Missile Command | Atari Missile Command Manual | [Archive.org](https://archive.org/) | PDF/TXT | Public Domain / Fair Use (Vintage Manual) | Cities, silos, & scoring |
-| Breakout | Atari Breakout Operations Manual | [Archive.org](https://archive.org/) | PDF/TXT | Public Domain / Fair Use (Vintage Manual) | Brick rows, angles, scoring |
+| Asteroids | asteroids_manual.md | Markdown | 2026-10-17 | ~800 | Complete gameplay, scoring, controls |
+| Pac-Man | pacman_manual.md | Markdown | 2026-10-17 | ~1200 | Ghost AI, scoring, fruit progression |
+| Space Invaders | space_invaders_manual.md | Markdown | 2026-10-17 | ~1100 | UFO patterns, scoring, strategy |
+| Centipede | centipede_manual.md | Markdown | 2026-10-17 | ~1300 | Multi-enemy mechanics, mushroom field |
+| Missile Command | missile_command_manual.md | Markdown | 2026-10-17 | ~1600 | Defense strategy, battery management |
+| Breakout | breakout_manual.md | Markdown | 2026-10-17 | ~1000 | Paddle control, brick breaking, tunneling |
+
+### Content Sources
+Information compiled from:
+- Wikipedia articles on classic arcade games
+- StrategyWiki game guides
+- Retro gaming community documentation
+- Original arcade game observations
+
+### License
+These documents are created for educational purposes as part of a portfolio RAG system demonstration. They contain factual information about classic video games that is widely available in the public domain.
 
 ## Guidelines for Adding Data
 1. Ensure all documents are public or permissible for research/evaluation under fair use.
