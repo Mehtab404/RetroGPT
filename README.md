@@ -1,0 +1,395 @@
+# RetroGPT — AI Assistant for Classic Games 🎮
+
+> A production-grade Retrieval-Augmented Generation (RAG) chatbot that answers questions about classic video games (Pong, Asteroids, Centipede, Missile Command, Breakout, etc.) with verifiable citations from game manuals, wikis, and FAQs.
+
+[![CI](https://github.com/YOUR_USERNAME/retrogpt/actions/workflows/ci.yml/badge.svg)](https://github.com/YOUR_USERNAME/retrogpt/actions/workflows/ci.yml)
+[![Deploy](https://github.com/YOUR_USERNAME/retrogpt/actions/workflows/deploy.yml/badge.svg)](https://github.com/YOUR_USERNAME/retrogpt/actions/workflows/deploy.yml)
+
+---
+
+## 🚀 Features
+
+- **Accurate retrieval:** Hybrid search (vector + BM25) with cross-encoder re-ranking
+- **Source citations:** Every answer includes references to original documents
+- **Production-ready:** Docker Compose, CI/CD, automated evaluation, structured logging
+- **Fast responses:** Redis caching for sub-200ms repeated queries
+- **Persistent chat:** MongoDB-backed session history
+- **Secure:** API key authentication with rate limiting
+
+---
+
+## 📊 Metrics (v1.0)
+
+| Metric | Target | Actual |
+|--------|--------|--------|
+| Retrieval Hit Rate @5 | ≥ 85% | _TBD_ |
+| MRR (Mean Reciprocal Rank) | ≥ 0.70 | _TBD_ |
+| Answer faithfulness (RAGAS) | ≥ 0.85 | _TBD_ |
+| p95 latency (uncached) | < 4 s | _TBD_ |
+| p95 latency (cached) | < 200 ms | _TBD_ |
+| Test coverage (AI service) | ≥ 70% | _TBD_ |
+
+---
+
+## 🏗️ Architecture
+
+```
+                ┌──────────────┐
+   Browser ───► │    Nginx     │  (reverse proxy, rate limit)
+                └──────┬───────┘
+          ┌────────────┴─────────────┐
+          ▼                          ▼
+   ┌─────────────┐           ┌────────────────┐
+   │  Frontend   │           │  API Gateway   │  Node.js + TypeScript
+   │ React+Vite  │           │  - auth        │
+   └─────────────┘           │  - validation  │──────► MongoDB (chat)
+                             │  - caching     │──────► Redis (cache)
+                             └───────┬────────┘
+                                     │ HTTP
+                                     ▼
+                             ┌────────────────┐
+                             │   AI Service   │  Python + FastAPI
+                             │ - ingestion    │
+                             │ - retrieval    │──────► Qdrant (vectors)
+                             │ - re-ranking   │
+                             │ - generation   │──────► Gemini / OpenAI
+                             └────────────────┘
+```
+
+### Tech Stack
+
+- **AI Service:** Python 3.12, FastAPI, LangChain, sentence-transformers
+- **API Gateway:** Node.js 20 LTS, TypeScript, Express, zod
+- **Frontend:** React, Vite, TypeScript
+- **Vector DB:** Qdrant (hybrid search support)
+- **Cache/DB:** Redis 7, MongoDB 7
+- **Proxy:** Nginx
+- **LLM:** Google Gemini (default), OpenAI (optional)
+- **Evaluation:** RAGAS + custom metrics
+- **Infrastructure:** Docker Compose, GitHub Actions CI/CD, AWS EC2/ECS
+
+---
+
+## 🛠️ Quick Start (Local Development)
+
+### Prerequisites
+
+- Docker Desktop (WSL2 backend for Windows)
+- Git
+- Node.js 20 LTS
+- Python 3.12
+- Google Gemini API key ([Get one here](https://ai.google.dev/))
+
+### Setup
+
+```powershell
+# Clone the repository
+git clone https://github.com/YOUR_USERNAME/retrogpt.git
+cd retrogpt
+
+# Configure environment variables
+copy .env.example .env
+# Edit .env and add your GOOGLE_API_KEY
+
+# Start all services
+docker compose up -d --build
+
+# Check service health
+docker compose ps
+
+# Ingest game documents into vector database
+docker compose exec ai-service python -m scripts.ingest /data/raw
+
+# Open the app
+start http://localhost
+```
+
+### Service Endpoints (Local)
+
+| Service | URL |
+|---------|-----|
+| App (via Nginx) | http://localhost |
+| API Gateway | http://localhost:4000 |
+| AI Service (docs) | http://localhost:8000/docs |
+| Qdrant Dashboard | http://localhost:6333/dashboard |
+
+### Development Commands
+
+```powershell
+# View logs
+docker compose logs -f ai-service
+docker compose logs -f api-gateway
+
+# Run tests
+docker compose exec ai-service pytest
+docker compose exec api-gateway npm test
+
+# Run evaluation suite
+docker compose exec ai-service python /eval/run_eval.py
+
+# Stop services
+docker compose down
+
+# Stop and remove volumes (fresh start)
+docker compose down -v
+```
+
+---
+
+## 📁 Project Structure
+
+```
+retrogpt/
+├── ai-service/          # Python FastAPI service
+│   ├── app/
+│   │   ├── ingestion/   # Document loaders, chunking, pipeline
+│   │   ├── retrieval/   # Vector store, hybrid search, re-ranking
+│   │   ├── generation/  # LLM abstraction, prompts
+│   │   └── main.py
+│   ├── scripts/
+│   │   └── ingest.py    # CLI ingestion tool
+│   └── tests/
+├── api-gateway/         # Node.js + TypeScript gateway
+│   ├── src/
+│   │   ├── routes/      # Chat, sessions endpoints
+│   │   ├── middleware/  # Auth, rate limiting, errors
+│   │   └── services/    # AI client, cache, DB
+│   └── tests/
+├── frontend/            # React + Vite UI
+│   └── src/
+├── eval/                # Evaluation framework
+│   ├── dataset.jsonl    # Test questions + expected results
+│   └── run_eval.py      # Hit rate, MRR, RAGAS metrics
+├── data/
+│   ├── raw/             # Source documents (gitignored)
+│   └── README.md        # Data sources & licenses
+├── nginx/
+│   └── nginx.conf
+├── .github/
+│   └── workflows/       # CI/CD pipelines
+└── docker-compose.yml
+```
+
+---
+
+## 🧪 Testing
+
+### Unit & Integration Tests
+
+```powershell
+# Python tests (ai-service)
+docker compose exec ai-service pytest -v --cov=app
+
+# Node tests (api-gateway)
+docker compose exec api-gateway npm test -- --coverage
+
+# End-to-end tests (optional)
+docker compose exec frontend npm run test:e2e
+```
+
+### Evaluation Suite
+
+```powershell
+# Run full evaluation
+docker compose exec ai-service python /eval/run_eval.py --output results/baseline.json
+
+# Compare two runs
+docker compose exec ai-service python /eval/run_eval.py --compare results/baseline.json results/improved.json
+```
+
+---
+
+## 🔐 Security
+
+- API key authentication via `x-api-key` header
+- Rate limiting: 30 requests/minute per IP (configurable)
+- Input validation with zod
+- No secrets in code or logs
+- CORS restricted to frontend origin
+- Prompt injection guards in system prompts
+
+---
+
+## 📈 Evaluation & Quality
+
+RetroGPT uses a comprehensive evaluation framework to measure retrieval and generation quality:
+
+- **Hit Rate @5:** Percentage of queries where the correct document appears in top 5 results
+- **MRR (Mean Reciprocal Rank):** Average of 1/rank for first relevant result
+- **RAGAS Faithfulness:** Measures if answers are grounded in retrieved context
+- **RAGAS Answer Relevancy:** Measures answer quality vs. question
+
+All metrics are tracked across baseline and improved configurations. See `eval/results/` for detailed reports.
+
+---
+
+## 🚢 Deployment
+
+### Production Deployment (AWS)
+
+```powershell
+# Build and push images to AWS ECR
+aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin <account>.dkr.ecr.us-east-1.amazonaws.com
+
+docker compose -f docker-compose.prod.yml build
+docker compose -f docker-compose.prod.yml push
+
+# Deploy to EC2/ECS (automated via GitHub Actions)
+# See .github/workflows/deploy.yml
+```
+
+### Environment Variables (Production)
+
+Store secrets in AWS Systems Manager Parameter Store or Secrets Manager. Never commit `.env` files.
+
+Required variables:
+- `GOOGLE_API_KEY` or `OPENAI_API_KEY`
+- `API_KEY` (gateway authentication)
+- `MONGO_URL`, `REDIS_URL`, `QDRANT_URL`
+
+---
+
+## 📝 API Documentation
+
+### Chat Endpoint
+
+```bash
+POST /api/chat
+Headers: x-api-key: <your-api-key>
+Body:
+{
+  "sessionId": "optional-session-uuid",
+  "question": "How do you score points in Asteroids?"
+}
+
+Response:
+{
+  "sessionId": "uuid",
+  "answer": "You score points by destroying asteroids... [1]",
+  "sources": [
+    {
+      "id": "asteroids_manual_p3_c2",
+      "title": "Asteroids Manual",
+      "page": 3,
+      "score": 0.91,
+      "snippet": "Large asteroids: 20 points..."
+    }
+  ],
+  "latency_ms": 1820,
+  "cached": false
+}
+```
+
+### Session History
+
+```bash
+GET /api/sessions/:sessionId
+Headers: x-api-key: <your-api-key>
+
+Response:
+{
+  "sessionId": "uuid",
+  "messages": [
+    {
+      "role": "user",
+      "content": "How do you score points?",
+      "createdAt": "2026-10-17T12:00:00Z"
+    },
+    {
+      "role": "assistant",
+      "content": "You score by destroying asteroids... [1]",
+      "sources": [...],
+      "createdAt": "2026-10-17T12:00:02Z"
+    }
+  ]
+}
+```
+
+---
+
+## 🤝 Contributing
+
+This is a portfolio/learning project. Contributions are welcome!
+
+### Development Workflow
+
+1. Create a branch: `git checkout -b feat/issue-number-description`
+2. Make changes following coding standards (see `RetroGPT-PROJECT.md`)
+3. Write/update tests
+4. Ensure CI passes: `docker compose exec ai-service pytest && docker compose exec api-gateway npm test`
+5. Commit using [Conventional Commits](https://www.conventionalcommits.org/): `feat: add hybrid search (#20)`
+6. Push and open a PR with `Closes #<issue-number>` in description
+
+### Coding Standards
+
+- **Python:** Type hints, ruff + black, pydantic models, 70%+ test coverage
+- **TypeScript:** `strict: true`, no `any`, zod validation, proper error handling
+- **Tests:** Mock external APIs in unit tests; use real services in integration tests
+
+---
+
+## 📚 Documentation
+
+- [`RetroGPT-PROJECT.md`](./RetroGPT-PROJECT.md) — Complete project specification
+- [`docs/decisions.md`](./docs/decisions.md) — Architecture decision records
+- [`data/README.md`](./data/README.md) — Data sources and licenses
+- [AI Service API docs](http://localhost:8000/docs) — Swagger/OpenAPI (when running)
+
+---
+
+## 🎯 Roadmap
+
+- [x] M0: Repository setup and infrastructure services
+- [ ] M1: RAG core (ingestion, retrieval, generation)
+- [ ] M2: API gateway (auth, caching, sessions)
+- [ ] M3: Frontend UI
+- [ ] M4: Evaluation suite and quality improvements
+- [ ] M5: Production deployment (AWS + CI/CD)
+- [ ] M6: Polish (streaming, load tests, documentation)
+
+See [GitHub Issues](https://github.com/YOUR_USERNAME/retrogpt/issues) for detailed task breakdown.
+
+---
+
+## 🐛 Known Issues
+
+_None yet — this section will be updated as issues are discovered._
+
+---
+
+## 📄 License
+
+This project is for educational and portfolio purposes. Game manuals and documentation are sourced from public archives and used under fair use for research and evaluation.
+
+See [`data/README.md`](./data/README.md) for detailed source attributions and licenses.
+
+---
+
+## 💡 What I Learned / Challenges
+
+_This section will be filled after M4-M6 completion._
+
+### Key Takeaways
+- Production RAG system design patterns
+- Hybrid search and re-ranking techniques
+- Evaluation-driven development for GenAI systems
+- Docker multi-service orchestration
+- End-to-end CI/CD with automated testing
+
+### Challenges Overcome
+- TBD: Retrieval accuracy optimization
+- TBD: Latency vs. quality tradeoffs
+- TBD: Chunking strategy selection
+
+---
+
+## 🙏 Acknowledgments
+
+- Classic game manuals from [Internet Archive](https://archive.org/)
+- [LangChain](https://www.langchain.com/) for RAG orchestration
+- [Qdrant](https://qdrant.tech/) for hybrid vector search
+- [RAGAS](https://github.com/explodinggradients/ragas) for evaluation framework
+
+---
+
+**Built with ❤️ as a portfolio project to demonstrate production-level RAG system development.**
