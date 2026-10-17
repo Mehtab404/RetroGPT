@@ -196,3 +196,28 @@ Follow-up questions ("What about the saucer?") were answered as standalone queri
 - Caching becomes conversation-scoped: the same follow-up text in different conversations no longer shares one cache entry — more Redis keys, bounded by the existing 24 h TTL.
 - If even the newest stored message exceeds the 4000-character cap, the bounded window is empty and the request degrades to a stateless ask (documented limitation).
 - Prompt growth from history is capped at 4000 characters (~1 K tokens), keeping cost and latency predictable.
+
+---
+
+## ADR 0008: Load Testing with k6
+
+- **Status:** Accepted
+- **Date:** 2026-10-17
+- **Issue:** #33 (backlog #28)
+
+### Context
+Backlog item #28 requires p50/p95 latency for cached vs. uncached `/api/chat` at 10 and 50 concurrent users, recorded in the README. The stack already has a two-layer retrieval path plus a Redis cache keyed by the normalised question (and, since #27, the conversation fingerprint), and a fixed offline dataset of 70 labeled questions. The measurement must be reproducible on the same dev compose stack as the rest of the project, work on Windows hosts, and not add runtime dependencies to either service.
+
+### Decision
+1. **k6 over Locust.** A single static binary ships as a pinned Docker image (`grafana/k6:2.3.0`), so no Python environment, worker fleet or new eval dependency is needed; Locust would require adding its package to the ai-service image to be equivalent. k6 also reports `med`/`p(95)` in its default summary, which is exactly the acceptance metric.
+2. **Dockerized runs through the Nginx front door.** The script mounts `eval/` read-only into the container and targets `http://host.docker.internal/api`, so the measured path includes Nginx, auth, the rate limiter, cache and MongoDB persistence. Linux hosts add `--add-host=host.docker.internal:host-gateway`.
+3. **The eval dataset is the question pool.** `eval/dataset.jsonl` supplies 70 real questions; because the cache key is `sha256(question)`, one cold pass is exactly 70 cache misses and the warm pass replays the identical set. Each response's `cached` flag is asserted (`cold ⇒ false`, `warm ⇒ true`), so the load test validates the cache contract instead of trusting status codes alone.
+4. **Cold and warm are separate modes with different executors.** `shared-iterations` guarantees each pooled question is asked once (uncached distribution); `constant-vus` sustains cached throughput for a fixed duration. VU count, duration and pool size are environment inputs, so the 10/50-VU matrix is four commands, not four scripts.
+5. **Thresholds catch misconfiguration, not performance regressions.** Cold runs fail above 5% error responses, warm runs above 1%; `--no-thresholds` bypasses them. The harness is never run in CI because uncached requests cost provider tokens and credentials; a `k6 inspect` syntax check runs on eval-touching PRs instead.
+6. **Operational prerequisites stay explicit.** Uncached runs need `GOOGLE_API_KEY`; the default 30 req/min IP rate limit must be raised via `RATE_LIMIT_PER_MIN` (and restored) for the run; the cache must be flushed before each cold pass. `eval/loadtest/README.md` captures the exact sequence and the troubleshooting table.
+
+### Consequences
+- The 10/50 × cached/uncached matrix is reproducible from the repo alone using the pinned image; numbers describe a local dev stack and are presented as relative measurements.
+- Uncached p95 interpolates 70 samples per flush and is LLM-bound (provider latency dominates), both stated in the README to prevent over-reading.
+- The warm path is verifiable without credentials: seeding one Redis key with a valid `CachedResponse` exercises the full cached flow (`cached: true`, thresholds green); full cold numbers remain pending a provider key.
+- Streaming latency (time-to-first-token on `/api/chat/stream`) is explicitly out of scope and left as future work.

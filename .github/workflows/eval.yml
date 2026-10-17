@@ -7,6 +7,9 @@ name: Eval Regression
 # Qdrant, using deterministic hashing embeddings — no API keys required, so
 # this works for forks and cost-free.  Fails when Hit Rate drops more than
 # 5 points below the committed baseline (eval/baselines/ci-offline.json).
+#
+# A second job parses the k6 load-test script (eval/loadtest/chat.js) with
+# `k6 inspect` so syntax regressions are caught without running load.
 
 on:
   pull_request:
@@ -78,3 +81,16 @@ jobs:
           path: eval/results/
           retention-days: 7
           if-no-files-found: ignore
+
+  loadtest-script:
+    name: Load-test Script Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Parses the script (including the dataset question extraction) without
+      # executing any requests; exits non-zero on syntax or init errors.
+      - name: Validate k6 load-test script
+        run: docker run --rm -v "$PWD/eval:/eval:ro" grafana/k6:2.3.0 inspect /eval/loadtest/chat.js
