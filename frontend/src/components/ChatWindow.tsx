@@ -45,6 +45,16 @@ export function ChatWindow({
 
   const showEmptyState = messages.length === 0 && !loading && !error;
 
+  // With streaming the assistant placeholder is added immediately; show the
+  // typing indicator only until the first token (or sources) arrive.
+  const lastMessage = messages[messages.length - 1];
+  const awaitingFirstToken =
+    loading &&
+    !(
+      lastMessage?.role === 'assistant' &&
+      (lastMessage.content.length > 0 || lastMessage.sources.length > 0)
+    );
+
   return (
     <main className="chat-window">
       <div
@@ -73,7 +83,7 @@ export function ChatWindow({
           />
         ))}
 
-        {loading && (
+        {awaitingFirstToken && (
           <div className="typing-indicator" role="status">
             <span className="typing-dots" aria-hidden="true">
               ● ● ●

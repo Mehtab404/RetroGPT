@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import App from '../App';
 import { ApiError } from '../api';
@@ -10,11 +10,12 @@ vi.mock('../api', async (importOriginal) => {
   return {
     ...actual,
     sendQuestion: vi.fn(),
+    streamQuestion: vi.fn(),
     getSessionHistory: vi.fn(),
   };
 });
 
-const mockSendQuestion = vi.mocked(api.sendQuestion);
+const mockStreamQuestion = vi.mocked(api.streamQuestion);
 const mockGetSessionHistory = vi.mocked(api.getSessionHistory);
 
 const SESSION_KEY = 'retrogpt.sessionId';
@@ -37,9 +38,23 @@ function chatResponse(overrides: Partial<api.ChatResponse> = {}): api.ChatRespon
   };
 }
 
+/** Make the next streamQuestion call deliver a full answer immediately. */
+function deliverAnswer(overrides: Partial<api.ChatResponse> = {}): void {
+  const response = chatResponse(overrides);
+  mockStreamQuestion.mockImplementation(async (_question, options) => {
+    options?.onMeta?.(response.sources);
+    options?.onToken?.(response.answer);
+    options?.onDone?.({
+      sessionId: response.sessionId,
+      latency_ms: response.latency_ms,
+      cached: response.cached,
+    });
+  });
+}
+
 beforeEach(() => {
   localStorage.clear();
-  mockSendQuestion.mockReset();
+  mockStreamQuestion.mockReset();
   mockGetSessionHistory.mockReset();
   mockGetSessionHistory.mockResolvedValue({ sessionId: 'no-session', messages: [] });
 });
@@ -76,9 +91,9 @@ describe('App — composer', () => {
 // ---------------------------------------------------------------------------
 
 describe('App — conversation flow', () => {
-  it('sends a question and renders the answer with sources', async () => {
+  it('streams an answer and renders it with sources', async () => {
     const user = userEvent.setup();
-    mockSendQuestion.mockResolvedValue(chatResponse());
+    deliverAnswer();
     render(<App />);
 
     await user.type(
@@ -87,9 +102,9 @@ describe('App — conversation flow', () => {
     );
     await user.click(screen.getByRole('button', { name: 'Ask' }));
 
-    expect(mockSendQuestion).toHaveBeenCalledWith(
+    expect(mockStreamQuestion).toHaveBeenCalledWith(
       'How do you score points in Asteroids?',
-      undefined,
+      expect.objectContaining({ sessionId: undefined }),
     );
 
     // User message and assistant answer both appear.
@@ -102,21 +117,69 @@ describe('App — conversation flow', () => {
     expect(screen.getByText('Large asteroids: 20 points...')).toBeInTheDocument();
   });
 
+  it('renders tokens incrementally and hides the typing indicator after the first token', async () => {
+    const user = userEvent.setup();
+    let pushToken!: (text: string) => void;
+    let finish!: () => void;
+
+    mockStreamQuestion.mockImplementation(
+      (_question, options) =>
+        new Promise<void>((resolve) => {
+          pushToken = (text) => options?.onToken?.(text);
+          finish = () => {
+            options?.onDone?.({
+              sessionId: 'session-stream',
+              latency_ms: 42,
+              cached: false,
+            });
+            resolve();
+          };
+        }),
+    );
+
+    render(<App />);
+
+    await user.type(
+      screen.getByLabelText('Your question'),
+      'How do you score points in Asteroids?',
+    );
+    await user.click(screen.getByRole('button', { name: 'Ask' }));
+
+    // The stream is open but no token arrived yet.
+    expect(screen.getByText('Thinking…')).toBeInTheDocument();
+    expect(screen.getByLabelText('Your question')).toBeDisabled();
+
+    // First token: indicator disappears, the partial answer shows.
+    act(() => pushToken('Large asteroids '));
+    expect(screen.queryByText('Thinking…')).not.toBeInTheDocument();
+    expect(screen.getByText(/Large asteroids/)).toBeInTheDocument();
+
+    // Remaining token plus done finalise the answer.
+    act(() => {
+      pushToken('score 20 points [1].');
+      finish();
+    });
+
+    await waitFor(() => expect(screen.getByLabelText('Your question')).toBeEnabled());
+    expect(screen.getByText(/score 20 points/)).toBeInTheDocument();
+    expect(localStorage.getItem(SESSION_KEY)).toBe('session-stream');
+  });
+
   it('submits on Enter and clears the input', async () => {
     const user = userEvent.setup();
-    mockSendQuestion.mockResolvedValue(chatResponse());
+    deliverAnswer();
     render(<App />);
 
     const input = screen.getByLabelText('Your question');
     await user.type(input, 'How do you score points in Asteroids?{Enter}');
 
-    await waitFor(() => expect(mockSendQuestion).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockStreamQuestion).toHaveBeenCalledTimes(1));
     expect(input).toHaveValue('');
   });
 
   it('persists the returned sessionId in localStorage', async () => {
     const user = userEvent.setup();
-    mockSendQuestion.mockResolvedValue(chatResponse({ sessionId: 'session-abc' }));
+    deliverAnswer({ sessionId: 'session-abc' });
     render(<App />);
 
     await user.type(screen.getByLabelText('Your question'), 'What is Pong?');
@@ -129,13 +192,16 @@ describe('App — conversation flow', () => {
     const user = userEvent.setup();
     localStorage.setItem(SESSION_KEY, 'session-abc');
     mockGetSessionHistory.mockResolvedValue({ sessionId: 'session-abc', messages: [] });
-    mockSendQuestion.mockResolvedValue(chatResponse({ sessionId: 'session-abc' }));
+    deliverAnswer({ sessionId: 'session-abc' });
     render(<App />);
 
     await user.type(screen.getByLabelText('Your question'), 'And how do saucers score?');
     await user.click(screen.getByRole('button', { name: 'Ask' }));
 
-    expect(mockSendQuestion).toHaveBeenCalledWith('And how do saucers score?', 'session-abc');
+    expect(mockStreamQuestion).toHaveBeenCalledWith(
+      'And how do saucers score?',
+      expect.objectContaining({ sessionId: 'session-abc' }),
+    );
   });
 
   it('restores conversation history from the API on load', async () => {
@@ -181,7 +247,7 @@ describe('App — conversation flow', () => {
 describe('App — source citations', () => {
   it('scrolls to and highlights the source when a citation is clicked', async () => {
     const user = userEvent.setup();
-    mockSendQuestion.mockResolvedValue(chatResponse());
+    deliverAnswer();
     const scrollSpy = vi.spyOn(Element.prototype, 'scrollIntoView').mockImplementation(() => {});
     render(<App />);
 
@@ -200,7 +266,7 @@ describe('App — source citations', () => {
 
   it('renders citation markers inside the answer as buttons', async () => {
     const user = userEvent.setup();
-    mockSendQuestion.mockResolvedValue(chatResponse());
+    deliverAnswer();
     render(<App />);
 
     await user.type(
@@ -218,9 +284,9 @@ describe('App — source citations', () => {
 // ---------------------------------------------------------------------------
 
 describe('App — errors', () => {
-  it('shows an alert banner when the request fails', async () => {
+  it('shows an alert banner and removes the empty placeholder when the stream fails to open', async () => {
     const user = userEvent.setup();
-    mockSendQuestion.mockRejectedValue(
+    mockStreamQuestion.mockRejectedValue(
       new ApiError('AI service is unavailable.', 'AI_SERVICE_ERROR', 502),
     );
     render(<App />);
@@ -233,11 +299,33 @@ describe('App — errors', () => {
 
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent('AI service is unavailable.');
+
+    // Only the user turn remains — the empty assistant bubble was dropped.
+    expect(screen.getAllByRole('article')).toHaveLength(1);
+  });
+
+  it('keeps partially streamed text when the stream breaks mid-answer', async () => {
+    const user = userEvent.setup();
+    mockStreamQuestion.mockImplementation(async (_question, options) => {
+      options?.onToken?.('Large asteroids ');
+      throw new ApiError('The connection was interrupted.', 'STREAM_INTERRUPTED');
+    });
+    render(<App />);
+
+    await user.type(
+      screen.getByLabelText('Your question'),
+      'How do you score points in Asteroids?',
+    );
+    await user.click(screen.getByRole('button', { name: 'Ask' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('The connection was interrupted.');
+    expect(screen.getByText(/Large asteroids/)).toBeInTheDocument();
   });
 
   it('re-enables the composer after an error', async () => {
     const user = userEvent.setup();
-    mockSendQuestion.mockRejectedValue(new ApiError('Boom', 'AI_SERVICE_ERROR', 502));
+    mockStreamQuestion.mockRejectedValue(new ApiError('Boom', 'AI_SERVICE_ERROR', 502));
     render(<App />);
 
     await user.type(

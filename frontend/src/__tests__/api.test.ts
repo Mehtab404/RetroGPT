@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, getSessionHistory, sendQuestion } from '../api';
+import { ApiError, getSessionHistory, sendQuestion, streamQuestion } from '../api';
 
 // ---------------------------------------------------------------------------
 // fetch mock helpers
@@ -13,6 +13,30 @@ function jsonResponse(body: unknown, status = 200): Response {
     status,
     json: async () => body,
   } as Response;
+}
+
+/** Encode an ASCII string as UTF-8 bytes (no TextEncoder dependency). */
+function bytes(text: string): Uint8Array {
+  return Uint8Array.from([...text].map((char) => char.charCodeAt(0)));
+}
+
+/** Response whose body streams the given raw chunks via a fake reader. */
+function sseResponse(chunks: string[], status = 200): Response {
+  const parts = chunks.map(bytes);
+  let index = 0;
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    body: {
+      getReader: () => ({
+        read: async () =>
+          index < parts.length
+            ? { done: false, value: parts[index++] }
+            : { done: true, value: undefined },
+        cancel: async () => undefined,
+      }),
+    },
+  } as unknown as Response;
 }
 
 beforeEach(() => {
@@ -141,5 +165,120 @@ describe('getSessionHistory()', () => {
 
     expect(error).toBeInstanceOf(ApiError);
     expect((error as ApiError).status).toBe(404);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// streamQuestion
+// ---------------------------------------------------------------------------
+
+describe('streamQuestion()', () => {
+  it('POSTs to /api/chat/stream with SSE headers and the sessionId', async () => {
+    fetchMock.mockResolvedValue(sseResponse([]));
+
+    await streamQuestion('How do you score in Asteroids?', { sessionId: 's1' });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/chat/stream');
+    expect(init.method).toBe('POST');
+    const headers = init.headers as Record<string, string>;
+    expect(headers.Accept).toBe('text/event-stream');
+    expect(headers['x-api-key']).toBeTruthy();
+    expect(JSON.parse(init.body as string)).toEqual({
+      question: 'How do you score in Asteroids?',
+      sessionId: 's1',
+    });
+  });
+
+  it('dispatches meta/token/done callbacks in order across chunk boundaries', async () => {
+    fetchMock.mockResolvedValue(
+      sseResponse([
+        'event: meta\ndata: {"sources":[{"id":"c1","title":"Asteroids Manual","score":0.9,"snippet":"s"}]}\n\nev',
+        'ent: token\ndata: {"text":"Large "}\n\nevent: token\ndata: {"text":"asteroids [1]."}\n\nevent: done\ndata: {"sessionId":"s1","latency_ms":42,"cached":false}\n\n',
+      ]),
+    );
+
+    const events: string[] = [];
+    const sources: unknown[] = [];
+    let done: unknown = null;
+
+    await streamQuestion('How do you score in Asteroids?', {
+      onMeta: (s) => {
+        events.push('meta');
+        sources.push(...s);
+      },
+      onToken: (text) => events.push(`token:${text}`),
+      onDone: (d) => {
+        events.push('done');
+        done = d;
+      },
+    });
+
+    expect(events).toEqual(['meta', 'token:Large ', 'token:asteroids [1].', 'done']);
+    expect(sources).toHaveLength(1);
+    expect(done).toEqual({ sessionId: 's1', latency_ms: 42, cached: false });
+  });
+
+  it('parses CRLF frames', async () => {
+    fetchMock.mockResolvedValue(
+      sseResponse([
+        'event: token\r\ndata: {"text":"Hi"}\r\n\r\nevent: done\r\ndata: {"sessionId":"s1","latency_ms":1,"cached":true}\r\n\r\n',
+      ]),
+    );
+
+    const tokens: string[] = [];
+    let done: unknown = null;
+    await streamQuestion('question', {
+      onToken: (text) => tokens.push(text),
+      onDone: (d) => {
+        done = d;
+      },
+    });
+
+    expect(tokens).toEqual(['Hi']);
+    expect(done).toEqual({ sessionId: 's1', latency_ms: 1, cached: true });
+  });
+
+  it('throws an ApiError when a mid-stream error event arrives', async () => {
+    fetchMock.mockResolvedValue(
+      sseResponse([
+        'event: token\ndata: {"text":"Partial "}\n\nevent: error\ndata: {"code":"LLM_ERROR","message":"provider exploded"}\n\n',
+      ]),
+    );
+
+    const tokens: string[] = [];
+    const error = await streamQuestion('question', {
+      onToken: (text) => tokens.push(text),
+    }).catch((e: unknown) => e);
+
+    expect(tokens).toEqual(['Partial ']);
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).code).toBe('LLM_ERROR');
+    expect((error as ApiError).message).toBe('provider exploded');
+  });
+
+  it('maps pre-stream JSON errors to an ApiError', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        { error: { code: 'AI_SERVICE_ERROR', message: 'AI service is unavailable.' } },
+        502,
+      ),
+    );
+
+    const error = await streamQuestion('question').catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).code).toBe('AI_SERVICE_ERROR');
+    expect((error as ApiError).status).toBe(502);
+  });
+
+  it('maps network failures to a NETWORK_ERROR ApiError', async () => {
+    fetchMock.mockRejectedValue(new TypeError('Failed to fetch'));
+
+    const error = await streamQuestion('question').catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).code).toBe('NETWORK_ERROR');
   });
 });
