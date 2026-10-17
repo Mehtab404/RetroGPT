@@ -20,6 +20,13 @@ jest.mock('../models/session', () => ({
   },
 }));
 
+// Rate limiter + cache: no real Redis calls in tests.
+jest.mock('../services/cache', () => ({
+  getRedisClient: jest.fn().mockResolvedValue(null),
+}));
+
+const API_KEY = process.env.API_KEY || 'change-me';
+
 // Retrieve mock references after the module has been set up
 import { Session } from '../models/session';
 const mockFindOne = Session.findOne as jest.Mock;
@@ -74,7 +81,7 @@ describe('GET /api/sessions/:id', () => {
     it('returns 200 with session messages when session exists', async () => {
       mockFindOne.mockReturnValue({ lean: () => Promise.resolve(makeSession()) });
 
-      const res = await request(app).get(`/api/sessions/${VALID_UUID}`);
+      const res = await request(app).get(`/api/sessions/${VALID_UUID}`).set('x-api-key', API_KEY);
 
       expect(res.status).toBe(200);
       expect(res.body.sessionId).toBe(VALID_UUID);
@@ -84,7 +91,7 @@ describe('GET /api/sessions/:id', () => {
     it('shapes user messages correctly (no sources field)', async () => {
       mockFindOne.mockReturnValue({ lean: () => Promise.resolve(makeSession()) });
 
-      const res = await request(app).get(`/api/sessions/${VALID_UUID}`);
+      const res = await request(app).get(`/api/sessions/${VALID_UUID}`).set('x-api-key', API_KEY);
 
       expect(res.status).toBe(200);
       const userMsg = res.body.messages[0];
@@ -96,7 +103,7 @@ describe('GET /api/sessions/:id', () => {
     it('shapes assistant messages correctly (with sources)', async () => {
       mockFindOne.mockReturnValue({ lean: () => Promise.resolve(makeSession()) });
 
-      const res = await request(app).get(`/api/sessions/${VALID_UUID}`);
+      const res = await request(app).get(`/api/sessions/${VALID_UUID}`).set('x-api-key', API_KEY);
 
       expect(res.status).toBe(200);
       const assistantMsg = res.body.messages[1];
@@ -112,7 +119,7 @@ describe('GET /api/sessions/:id', () => {
     it('returns ISO8601 createdAt strings', async () => {
       mockFindOne.mockReturnValue({ lean: () => Promise.resolve(makeSession()) });
 
-      const res = await request(app).get(`/api/sessions/${VALID_UUID}`);
+      const res = await request(app).get(`/api/sessions/${VALID_UUID}`).set('x-api-key', API_KEY);
 
       expect(res.status).toBe(200);
       expect(res.body.messages[0].createdAt).toBe('2026-10-17T10:00:00.000Z');
@@ -124,7 +131,7 @@ describe('GET /api/sessions/:id', () => {
         lean: () => Promise.resolve({ sessionId: VALID_UUID, messages: [] }),
       });
 
-      const res = await request(app).get(`/api/sessions/${VALID_UUID}`);
+      const res = await request(app).get(`/api/sessions/${VALID_UUID}`).set('x-api-key', API_KEY);
 
       expect(res.status).toBe(200);
       expect(res.body.messages).toEqual([]);
@@ -133,7 +140,7 @@ describe('GET /api/sessions/:id', () => {
     it('queries MongoDB with the correct sessionId', async () => {
       mockFindOne.mockReturnValue({ lean: () => Promise.resolve(makeSession(ANOTHER_UUID)) });
 
-      await request(app).get(`/api/sessions/${ANOTHER_UUID}`);
+      await request(app).get(`/api/sessions/${ANOTHER_UUID}`).set('x-api-key', API_KEY);
 
       expect(mockFindOne).toHaveBeenCalledWith({ sessionId: ANOTHER_UUID });
     });
@@ -153,7 +160,7 @@ describe('GET /api/sessions/:id', () => {
           }),
       });
 
-      const res = await request(app).get(`/api/sessions/${VALID_UUID}`);
+      const res = await request(app).get(`/api/sessions/${VALID_UUID}`).set('x-api-key', API_KEY);
 
       expect(res.status).toBe(200);
       expect(typeof res.body.messages[0].createdAt).toBe('string');
@@ -168,7 +175,7 @@ describe('GET /api/sessions/:id', () => {
     it('returns 404 when session does not exist', async () => {
       mockFindOne.mockReturnValue({ lean: () => Promise.resolve(null) });
 
-      const res = await request(app).get(`/api/sessions/${VALID_UUID}`);
+      const res = await request(app).get(`/api/sessions/${VALID_UUID}`).set('x-api-key', API_KEY);
 
       expect(res.status).toBe(404);
       expect(res.body.error.code).toBe('NOT_FOUND');
@@ -177,7 +184,7 @@ describe('GET /api/sessions/:id', () => {
     it('includes the sessionId in the 404 message', async () => {
       mockFindOne.mockReturnValue({ lean: () => Promise.resolve(null) });
 
-      const res = await request(app).get(`/api/sessions/${VALID_UUID}`);
+      const res = await request(app).get(`/api/sessions/${VALID_UUID}`).set('x-api-key', API_KEY);
 
       expect(res.body.error.message).toContain(VALID_UUID);
     });
@@ -189,21 +196,21 @@ describe('GET /api/sessions/:id', () => {
 
   describe('validation errors', () => {
     it('returns 400 for a non-UUID id', async () => {
-      const res = await request(app).get('/api/sessions/not-a-uuid');
+      const res = await request(app).get('/api/sessions/not-a-uuid').set('x-api-key', API_KEY);
 
       expect(res.status).toBe(400);
       expect(res.body.error.code).toBe('VALIDATION_ERROR');
     });
 
     it('returns 400 for a numeric id', async () => {
-      const res = await request(app).get('/api/sessions/12345');
+      const res = await request(app).get('/api/sessions/12345').set('x-api-key', API_KEY);
 
       expect(res.status).toBe(400);
       expect(res.body.error.code).toBe('VALIDATION_ERROR');
     });
 
     it('does not query MongoDB when id is invalid', async () => {
-      await request(app).get('/api/sessions/bad-id');
+      await request(app).get('/api/sessions/bad-id').set('x-api-key', API_KEY);
 
       expect(mockFindOne).not.toHaveBeenCalled();
     });
@@ -219,7 +226,7 @@ describe('GET /api/sessions/:id', () => {
         lean: () => Promise.reject(new Error('DB connection lost')),
       });
 
-      const res = await request(app).get(`/api/sessions/${VALID_UUID}`);
+      const res = await request(app).get(`/api/sessions/${VALID_UUID}`).set('x-api-key', API_KEY);
 
       expect(res.status).toBe(500);
     });
