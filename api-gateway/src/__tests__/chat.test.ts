@@ -23,14 +23,20 @@ jest.mock('../models/session', () => ({
 jest.mock('../services/cache', () => ({
   getCachedResponse: jest.fn().mockResolvedValue(null),
   setCachedResponse: jest.fn().mockResolvedValue(undefined),
+  // Rate limiter fails open in tests (no Redis)
+  getRedisClient: jest.fn().mockResolvedValue(null),
 }));
+
+const API_KEY = process.env.API_KEY || 'change-me';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 /** Build a minimal valid AiQueryResponse. */
-function makeAiResponse(overrides: Partial<aiClient.AiQueryResponse> = {}): aiClient.AiQueryResponse {
+function makeAiResponse(
+  overrides: Partial<aiClient.AiQueryResponse> = {},
+): aiClient.AiQueryResponse {
   return {
     answer: 'You score points by destroying asteroids. [1]',
     sources: [
@@ -48,11 +54,7 @@ function makeAiResponse(overrides: Partial<aiClient.AiQueryResponse> = {}): aiCl
 }
 
 /** Build an AxiosError with an HTTP response attached. */
-function makeAxiosError(
-  status: number,
-  data: unknown = {},
-  code?: string,
-): AxiosError {
+function makeAxiosError(status: number, data: unknown = {}, code?: string): AxiosError {
   const err = new axios.AxiosError('Request failed', code ?? String(status));
   err.response = {
     status,
@@ -82,9 +84,7 @@ describe('POST /api/chat', () => {
   beforeEach(() => {
     jest.clearAllMocks();
 
-    querySpy = jest
-      .spyOn(aiClient, 'queryAiService')
-      .mockResolvedValue(makeAiResponse());
+    querySpy = jest.spyOn(aiClient, 'queryAiService').mockResolvedValue(makeAiResponse());
 
     getCacheSpy = jest.spyOn(cache, 'getCachedResponse').mockResolvedValue(null);
     setCacheSpy = jest.spyOn(cache, 'setCachedResponse').mockResolvedValue(undefined);
@@ -102,6 +102,7 @@ describe('POST /api/chat', () => {
     it('returns 200 with answer and sources for a valid question', async () => {
       const res = await request(app)
         .post('/api/chat')
+        .set('x-api-key', API_KEY)
         .send({ question: 'How do you score points in Asteroids?' });
 
       expect(res.status).toBe(200);
@@ -116,6 +117,7 @@ describe('POST /api/chat', () => {
     it('returns a sessionId in the response', async () => {
       const res = await request(app)
         .post('/api/chat')
+        .set('x-api-key', API_KEY)
         .send({ question: 'What is Pong?' });
 
       expect(res.status).toBe(200);
@@ -128,6 +130,7 @@ describe('POST /api/chat', () => {
       const sessionId = '550e8400-e29b-41d4-a716-446655440000';
       const res = await request(app)
         .post('/api/chat')
+        .set('x-api-key', API_KEY)
         .send({ question: 'What is Pong?', sessionId });
 
       expect(res.status).toBe(200);
@@ -137,6 +140,7 @@ describe('POST /api/chat', () => {
     it('auto-generates a sessionId when not provided', async () => {
       const res = await request(app)
         .post('/api/chat')
+        .set('x-api-key', API_KEY)
         .send({ question: 'How to play Breakout?' });
 
       expect(res.status).toBe(200);
@@ -148,17 +152,16 @@ describe('POST /api/chat', () => {
 
     it('forwards the question to the AI service', async () => {
       const question = 'How many lives do you start with in Missile Command?';
-      await request(app).post('/api/chat').send({ question });
+      await request(app).post('/api/chat').set('x-api-key', API_KEY).send({ question });
 
       expect(querySpy).toHaveBeenCalledTimes(1);
-      expect(querySpy).toHaveBeenCalledWith(
-        expect.objectContaining({ question }),
-      );
+      expect(querySpy).toHaveBeenCalledWith(expect.objectContaining({ question }));
     });
 
     it('accepts a question at the minimum length boundary (3 chars)', async () => {
       const res = await request(app)
         .post('/api/chat')
+        .set('x-api-key', API_KEY)
         .send({ question: 'Hi?' });
 
       expect(res.status).toBe(200);
@@ -166,9 +169,7 @@ describe('POST /api/chat', () => {
 
     it('accepts a question at the maximum length boundary (500 chars)', async () => {
       const question = 'A'.repeat(500);
-      const res = await request(app)
-        .post('/api/chat')
-        .send({ question });
+      const res = await request(app).post('/api/chat').set('x-api-key', API_KEY).send({ question });
 
       expect(res.status).toBe(200);
     });
@@ -176,6 +177,7 @@ describe('POST /api/chat', () => {
     it('returns sources array from AI service response', async () => {
       const res = await request(app)
         .post('/api/chat')
+        .set('x-api-key', API_KEY)
         .send({ question: 'How do asteroids split?' });
 
       expect(res.body.sources).toHaveLength(1);
@@ -198,6 +200,7 @@ describe('POST /api/chat', () => {
 
       const res = await request(app)
         .post('/api/chat')
+        .set('x-api-key', API_KEY)
         .send({ question: 'How do you score in Asteroids?' });
 
       expect(res.status).toBe(200);
@@ -208,7 +211,7 @@ describe('POST /api/chat', () => {
       getCacheSpy.mockResolvedValue(null);
       const question = 'How do you score in Asteroids?';
 
-      await request(app).post('/api/chat').send({ question });
+      await request(app).post('/api/chat').set('x-api-key', API_KEY).send({ question });
 
       expect(getCacheSpy).toHaveBeenCalledWith(question);
       // AI service should still be called on a miss
@@ -221,7 +224,7 @@ describe('POST /api/chat', () => {
       querySpy.mockResolvedValue(aiResp);
 
       const question = 'How do you score in Asteroids?';
-      await request(app).post('/api/chat').send({ question });
+      await request(app).post('/api/chat').set('x-api-key', API_KEY).send({ question });
 
       expect(setCacheSpy).toHaveBeenCalledWith(
         question,
@@ -250,6 +253,7 @@ describe('POST /api/chat', () => {
 
       const res = await request(app)
         .post('/api/chat')
+        .set('x-api-key', API_KEY)
         .send({ question: 'How do you score in Asteroids?' });
 
       expect(res.status).toBe(200);
@@ -268,6 +272,7 @@ describe('POST /api/chat', () => {
 
       await request(app)
         .post('/api/chat')
+        .set('x-api-key', API_KEY)
         .send({ question: 'How do you score in Asteroids?' });
 
       expect(querySpy).not.toHaveBeenCalled();
@@ -284,6 +289,7 @@ describe('POST /api/chat', () => {
       const sessionId = '550e8400-e29b-41d4-a716-446655440000';
       const res = await request(app)
         .post('/api/chat')
+        .set('x-api-key', API_KEY)
         .send({ question: 'How do you score in Asteroids?', sessionId });
 
       expect(res.status).toBe(200);
@@ -291,7 +297,7 @@ describe('POST /api/chat', () => {
     });
 
     it('does not call getCachedResponse when validation fails', async () => {
-      await request(app).post('/api/chat').send({ question: 'AB' });
+      await request(app).post('/api/chat').set('x-api-key', API_KEY).send({ question: 'AB' });
 
       expect(getCacheSpy).not.toHaveBeenCalled();
     });
@@ -303,7 +309,7 @@ describe('POST /api/chat', () => {
 
   describe('validation errors', () => {
     it('returns 400 when question is missing', async () => {
-      const res = await request(app).post('/api/chat').send({});
+      const res = await request(app).post('/api/chat').set('x-api-key', API_KEY).send({});
 
       expect(res.status).toBe(400);
       expect(res.body.error.code).toBe('VALIDATION_ERROR');
@@ -312,6 +318,7 @@ describe('POST /api/chat', () => {
     it('returns 400 when question is too short (< 3 chars)', async () => {
       const res = await request(app)
         .post('/api/chat')
+        .set('x-api-key', API_KEY)
         .send({ question: 'Hi' });
 
       expect(res.status).toBe(400);
@@ -326,6 +333,7 @@ describe('POST /api/chat', () => {
     it('returns 400 when question exceeds 500 characters', async () => {
       const res = await request(app)
         .post('/api/chat')
+        .set('x-api-key', API_KEY)
         .send({ question: 'A'.repeat(501) });
 
       expect(res.status).toBe(400);
@@ -333,7 +341,7 @@ describe('POST /api/chat', () => {
     });
 
     it('returns 400 when sessionId is not a valid UUID', async () => {
-      const res = await request(app).post('/api/chat').send({
+      const res = await request(app).post('/api/chat').set('x-api-key', API_KEY).send({
         question: 'What is Centipede?',
         sessionId: 'not-a-uuid',
       });
@@ -345,6 +353,7 @@ describe('POST /api/chat', () => {
     it('returns 400 when question is not a string', async () => {
       const res = await request(app)
         .post('/api/chat')
+        .set('x-api-key', API_KEY)
         .send({ question: 12345 });
 
       expect(res.status).toBe(400);
@@ -352,7 +361,7 @@ describe('POST /api/chat', () => {
     });
 
     it('does not call AI service when validation fails', async () => {
-      await request(app).post('/api/chat').send({ question: 'AB' });
+      await request(app).post('/api/chat').set('x-api-key', API_KEY).send({ question: 'AB' });
 
       expect(querySpy).not.toHaveBeenCalled();
     });
@@ -368,6 +377,7 @@ describe('POST /api/chat', () => {
 
       const res = await request(app)
         .post('/api/chat')
+        .set('x-api-key', API_KEY)
         .send({ question: 'What is Space Invaders?' });
 
       expect(res.status).toBe(502);
@@ -375,12 +385,11 @@ describe('POST /api/chat', () => {
     });
 
     it('returns 400 when AI service returns 422 (upstream validation error)', async () => {
-      querySpy.mockRejectedValue(
-        makeAxiosError(422, { detail: 'question too long' }),
-      );
+      querySpy.mockRejectedValue(makeAxiosError(422, { detail: 'question too long' }));
 
       const res = await request(app)
         .post('/api/chat')
+        .set('x-api-key', API_KEY)
         .send({ question: 'What is Galaga?' });
 
       expect(res.status).toBe(400);
@@ -392,6 +401,7 @@ describe('POST /api/chat', () => {
 
       const res = await request(app)
         .post('/api/chat')
+        .set('x-api-key', API_KEY)
         .send({ question: 'What is Frogger?' });
 
       expect(res.status).toBe(504);
@@ -403,6 +413,7 @@ describe('POST /api/chat', () => {
 
       const res = await request(app)
         .post('/api/chat')
+        .set('x-api-key', API_KEY)
         .send({ question: 'What is Donkey Kong?' });
 
       expect(res.status).toBe(504);
@@ -414,6 +425,7 @@ describe('POST /api/chat', () => {
 
       const res = await request(app)
         .post('/api/chat')
+        .set('x-api-key', API_KEY)
         .send({ question: 'What is Pac-Man?' });
 
       expect(res.status).toBe(502);
