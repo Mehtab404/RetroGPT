@@ -3,6 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import { config } from './config';
 import { errorHandler } from './middleware/errorHandler';
+import chatRouter from './routes/chat';
 
 const app: Application = express();
 
@@ -34,6 +35,9 @@ app.get('/', (_req: Request, res: Response) => {
     health: '/api/health',
   });
 });
+
+// API routes
+app.use('/api', chatRouter);
 
 // Error handling middleware (must be last)
 app.use(errorHandler);
