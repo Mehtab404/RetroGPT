@@ -10,8 +10,13 @@ Design decisions
   never blocked.
 * Collections use Cosine distance because the embedding providers
   return L2-normalised vectors (cosine ≅ inner product for unit vecs).
-* Sparse (BM25) indexes are left for Issue #10 (hybrid search); this
-  module focuses on the dense-only path.
+* Collections created with ``settings.hybrid_search_enabled`` also get a
+  named ``"bm25"`` sparse-vector config.  Sparse vectors are computed
+  client-side by :class:`~app.retrieval.bm25.Bm25Encoder` (Qdrant 1.7 has
+  no server-side BM25) and attached to each point during upsert.
+* Legacy dense-only collections are supported: :meth:`supports_sparse`
+  detects a missing sparse config and upsert/search fall back to the
+  dense path (Issue #20).
 * Every upsert is idempotent: re-ingesting the same chunk_id silently
   overwrites the existing point (Qdrant's default ``upsert`` semantics).
 
@@ -27,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from collections.abc import Sequence
 from typing import Any
 
@@ -36,12 +42,38 @@ from qdrant_client.http.exceptions import UnexpectedResponse
 
 from app.config import settings
 from app.ingestion.chunker import Chunk
+from app.retrieval.bm25 import Bm25Encoder
 
 logger = logging.getLogger(__name__)
 
 # Qdrant batch size for upsert calls.  Qdrant recommends ≤ 100 points per
 # request to stay within default gRPC message limits.
 _UPSERT_BATCH_SIZE: int = 100
+
+#: Qdrant's default (unnamed) dense vector is addressed by the empty string.
+DENSE_VECTOR_NAME: str = ""
+
+#: Name of the named sparse (BM25) vector configured for hybrid search.
+SPARSE_VECTOR_NAME: str = "bm25"
+
+
+def _to_point_id(raw_id: str) -> int | str:
+    """Convert a chunk ID into a valid Qdrant point ID.
+
+    Qdrant point IDs must be unsigned 64-bit integers or UUIDs, while chunk
+    IDs are 16-char SHA-256 fragments (e.g. ``"0f3a…"``).  Numeric strings
+    are converted to integers; anything else is mapped to a deterministic
+    UUIDv5, so re-ingesting the same chunk overwrites the same point
+    (idempotent upserts) and citations keep the original short chunk ID.
+    """
+    try:
+        return int(raw_id)
+    except (TypeError, ValueError):
+        pass
+    try:
+        return str(uuid.UUID(raw_id))
+    except (AttributeError, ValueError):
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, f"retrogpt:{raw_id}"))
 
 
 # ---------------------------------------------------------------------------
@@ -135,19 +167,37 @@ class QdrantVectorStore:
         self.upsert_batch = upsert_batch
         # Allow injecting a pre-built client (useful for testing).
         self._client: QdrantClient = client or QdrantClient(url=self._url)
+        # BM25 encoder attached by the ingestion pipeline / hybrid search.
+        self._bm25_encoder: Bm25Encoder | None = None
+        # Cached tri-state: None = unknown, True/False = probed.
+        self._sparse_supported: bool | None = None
 
     # ------------------------------------------------------------------
     # Collection management
     # ------------------------------------------------------------------
 
-    async def ensure_collection(self) -> None:
+    async def ensure_collection(self, recreate_if_incompatible: bool = False) -> None:
         """Create the Qdrant collection if it does not yet exist.
 
         Uses Cosine distance for similarity; the embedding providers already
         return L2-normalised vectors, so Cosine and dot-product are equivalent.
 
-        If the collection already exists with compatible parameters, this
-        is a no-op.
+        When ``settings.hybrid_search_enabled`` is true, new collections are
+        also created with a named ``"bm25"`` sparse-vector config so they can
+        store BM25 term weights for hybrid retrieval.
+
+        If the collection already exists:
+
+        * with a sparse config → no-op;
+        * without a sparse config but hybrid search is enabled → a warning is
+          logged (retrieval will fall back to dense) unless
+          *recreate_if_incompatible* is true, in which case the collection is
+          deleted and re-created.  **All existing points are dropped**;
+          re-ingest afterwards.
+
+        Args:
+            recreate_if_incompatible: Whether to drop and re-create an
+                existing collection that lacks the sparse-vector config.
 
         Raises:
             VectorStoreError: If Qdrant returns an unexpected error.
@@ -157,12 +207,40 @@ class QdrantVectorStore:
             if not exists:
                 await asyncio.to_thread(self._create_collection)
                 logger.info(
-                    "Created Qdrant collection '%s' (dim=%d).",
+                    "Created Qdrant collection '%s' (dim=%d, sparse=%s).",
                     self.collection,
                     self.vector_size,
+                    settings.hybrid_search_enabled,
                 )
-            else:
+                return
+
+            if not settings.hybrid_search_enabled:
                 logger.debug("Collection '%s' already exists.", self.collection)
+                return
+
+            if await asyncio.to_thread(self._collection_has_sparse):
+                logger.debug(
+                    "Collection '%s' already exists (hybrid search ready).",
+                    self.collection,
+                )
+                return
+
+            if recreate_if_incompatible:
+                logger.warning(
+                    "Recreating collection '%s' for hybrid search; "
+                    "existing points are dropped (re-ingest afterwards).",
+                    self.collection,
+                )
+                await asyncio.to_thread(self._client.delete_collection, self.collection)
+                await asyncio.to_thread(self._create_collection)
+                return
+
+            logger.warning(
+                "Collection '%s' exists without sparse vectors; hybrid search "
+                "will fall back to dense. Delete and re-ingest the collection "
+                "(or pass recreate_if_incompatible=True) to enable hybrid search.",
+                self.collection,
+            )
         except VectorStoreError:
             raise
         except Exception as exc:
@@ -175,15 +253,52 @@ class QdrantVectorStore:
         collections = self._client.get_collections().collections
         return any(c.name == self.collection for c in collections)
 
+    def _collection_has_sparse(self) -> bool:
+        """Probe the collection config for a sparse-vector section.
+
+        Updates the cached :attr:`_sparse_supported` flag as a side effect.
+        """
+        info = self._client.get_collection(self.collection)
+        sparse_vectors = getattr(info.config.params, "sparse_vectors", None)
+        self._sparse_supported = bool(sparse_vectors)
+        return self._sparse_supported
+
     def _create_collection(self) -> None:
         """Create the Qdrant collection (blocking call)."""
+        sparse_vectors_config = None
+        if settings.hybrid_search_enabled:
+            sparse_vectors_config = {SPARSE_VECTOR_NAME: qdrant_models.SparseVectorParams()}
         self._client.create_collection(
             collection_name=self.collection,
             vectors_config=qdrant_models.VectorParams(
                 size=self.vector_size,
                 distance=qdrant_models.Distance.COSINE,
             ),
+            sparse_vectors_config=sparse_vectors_config,
         )
+        # We know the config we just created; avoids an extra round-trip.
+        self._sparse_supported = sparse_vectors_config is not None
+
+    def supports_sparse(self) -> bool:
+        """Return whether the underlying collection can store sparse vectors.
+
+        Probed from the collection config on first use and cached for the
+        lifetime of the store.  Any probe error (e.g. collection missing)
+        is treated as "no sparse support" so callers can fail open to the
+        dense-only path.
+
+        Note: the first call issues a blocking ``get_collection`` request.
+        """
+        if self._sparse_supported is None:
+            try:
+                self._collection_has_sparse()
+            except Exception:
+                self._sparse_supported = False
+        return self._sparse_supported
+
+    def set_bm25_encoder(self, encoder: Bm25Encoder | None) -> None:
+        """Attach (or clear) the BM25 encoder used for sparse vectors."""
+        self._bm25_encoder = encoder
 
     async def delete_collection(self) -> None:
         """Delete the collection if it exists.
@@ -195,6 +310,7 @@ class QdrantVectorStore:
         """
         try:
             await asyncio.to_thread(self._client.delete_collection, self.collection)
+            self._sparse_supported = None
             logger.info("Deleted Qdrant collection '%s'.", self.collection)
         except Exception as exc:
             raise VectorStoreError(
@@ -215,7 +331,10 @@ class QdrantVectorStore:
         Each chunk is stored as a Qdrant point where:
 
         * **id**      – the ``chunk_id`` from ``chunk.metadata["chunk_id"]``
-        * **vector**  – the corresponding dense embedding
+        * **vector**  – the corresponding dense embedding; when a BM25
+                        encoder is attached (see :meth:`set_bm25_encoder`)
+                        and the collection supports sparse vectors, the
+                        point stores ``{"": dense, "bm25": SparseVector}``
         * **payload** – all chunk metadata fields plus ``"content"`` for the
                         raw text
 
@@ -247,19 +366,36 @@ class QdrantVectorStore:
         if not chunks_list:
             return 0
 
+        # Decide once per call whether sparse vectors are attached.
+        use_sparse = self._bm25_encoder is not None and await asyncio.to_thread(
+            self.supports_sparse
+        )
+        encoder = self._bm25_encoder if use_sparse else None
+
         total = 0
         for batch_start in range(0, len(chunks_list), self.upsert_batch):
             batch_chunks = chunks_list[batch_start : batch_start + self.upsert_batch]
             batch_vectors = vectors_list[batch_start : batch_start + self.upsert_batch]
 
-            points = [
-                qdrant_models.PointStruct(
-                    id=chunk.metadata.get("chunk_id") or f"chunk_{batch_start + i}",
-                    vector=list(vec),
-                    payload={**chunk.metadata, "content": chunk.content},
+            points = []
+            for i, (chunk, vec) in enumerate(zip(batch_chunks, batch_vectors, strict=True)):
+                vector: Any
+                if encoder is not None:
+                    vector = {
+                        DENSE_VECTOR_NAME: list(vec),
+                        SPARSE_VECTOR_NAME: encoder.encode(chunk.content),
+                    }
+                else:
+                    vector = list(vec)
+                points.append(
+                    qdrant_models.PointStruct(
+                        id=_to_point_id(
+                            str(chunk.metadata.get("chunk_id") or f"chunk_{batch_start + i}")
+                        ),
+                        vector=vector,
+                        payload={**chunk.metadata, "content": chunk.content},
+                    )
                 )
-                for i, (chunk, vec) in enumerate(zip(batch_chunks, batch_vectors, strict=True))
-            ]
 
             try:
                 await asyncio.to_thread(
@@ -322,18 +458,74 @@ class QdrantVectorStore:
         except Exception as exc:
             raise VectorStoreError(f"Qdrant search failed in '{self.collection}': {exc}") from exc
 
-        results: list[SearchResult] = []
-        for hit in hits:
-            payload: dict[str, Any] = hit.payload or {}
-            results.append(
-                SearchResult(
-                    chunk_id=str(payload.get("chunk_id", hit.id)),
-                    score=hit.score,
-                    payload=payload,
-                    content=payload.get("content", ""),
-                )
+        return [self._hit_to_result(hit) for hit in hits]
+
+    async def search_sparse(
+        self,
+        query: str,
+        top_k: int | None = None,
+        filter: qdrant_models.Filter | None = None,
+    ) -> list[SearchResult]:
+        """Perform a BM25 sparse-vector search for the raw *query* text.
+
+        The query is encoded client-side with the BM25 encoder attached via
+        :meth:`set_bm25_encoder`, producing the same term indices/weights
+        used when the points were ingested.
+
+        Args:
+            query:  Raw query text (not embedded).
+            top_k:  Maximum number of results to return.
+                    Defaults to ``settings.retrieval_top_k``.
+            filter: Optional Qdrant ``Filter`` to narrow results.
+
+        Returns:
+            Ordered list of :class:`SearchResult`, best BM25 score first.
+
+        Raises:
+            VectorStoreError: If no encoder is attached, the collection has
+                no sparse vectors, or Qdrant fails.
+        """
+        if self._bm25_encoder is None:
+            raise VectorStoreError("sparse search requires an attached BM25 encoder")
+        if not await asyncio.to_thread(self.supports_sparse):
+            raise VectorStoreError(
+                f"collection '{self.collection}' has no sparse vectors configured"
             )
-        return results
+
+        sparse_vector = self._bm25_encoder.encode(query)
+        if not sparse_vector.indices:
+            # No known terms in the query → nothing sparse can match.
+            return []
+
+        k = top_k if top_k is not None else settings.retrieval_top_k
+        try:
+            hits = await asyncio.to_thread(
+                self._client.search,
+                collection_name=self.collection,
+                query_vector=qdrant_models.NamedSparseVector(
+                    name=SPARSE_VECTOR_NAME, vector=sparse_vector
+                ),
+                limit=k,
+                query_filter=filter,
+                with_payload=True,
+            )
+        except Exception as exc:
+            raise VectorStoreError(
+                f"Qdrant sparse search failed in '{self.collection}': {exc}"
+            ) from exc
+
+        return [self._hit_to_result(hit) for hit in hits]
+
+    @staticmethod
+    def _hit_to_result(hit: Any) -> SearchResult:
+        """Convert a Qdrant scored point into a :class:`SearchResult`."""
+        payload: dict[str, Any] = hit.payload or {}
+        return SearchResult(
+            chunk_id=str(payload.get("chunk_id", hit.id)),
+            score=hit.score,
+            payload=payload,
+            content=payload.get("content", ""),
+        )
 
     # ------------------------------------------------------------------
     # Convenience helpers

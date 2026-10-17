@@ -30,6 +30,13 @@ class Settings(BaseSettings):
     retrieval_top_k: int = 20
     rerank_top_n: int = 5
 
+    # Hybrid search (dense + BM25 sparse, fused with RRF) — Issue #20
+    hybrid_search_enabled: bool = True
+    #: Candidates fetched from each retriever before RRF fusion.
+    hybrid_prefetch_k: int = 20
+    #: Persisted BM25 corpus statistics (written at ingestion time).
+    bm25_stats_path: str = "/data/bm25_stats.json"
+
 
 # Global settings instance
 settings = Settings()

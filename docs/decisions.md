@@ -31,3 +31,27 @@ RetroGPT is designed as a production-grade Retrieval-Augmented Generation (RAG) 
 ### Consequences
 - Clean separation of concerns between API orchestration (Node.js) and GenAI/RAG workloads (Python).
 - Local-to-production parity using Docker Compose.
+
+---
+
+## ADR 0002: Hybrid Search via Client-Side BM25 + Reciprocal Rank Fusion
+
+- **Status:** Accepted
+- **Date:** 2026-10-17
+- **Issue:** #20
+
+### Context
+ADR 0001 committed RetroGPT to hybrid retrieval (dense embeddings + BM25 sparse search fused with RRF). Qdrant supports sparse vectors natively, but the pinned `qdrant-client==1.7.3` has no server-side BM25 encoding/inference and no `query_points`/`Prefetch` fusion API.
+
+### Decision
+1. **Client-side BM25 encoder** (`app/retrieval/bm25.py`): plain-Python BM25 (`k1=1.2`, `b=0.75`), deterministic sorted vocabulary, simple lowercase alphanumeric tokenisation. Corpus statistics are persisted to `/data/bm25_stats.json` after ingestion; the query path loads the same statistics so term indices/weights match the indexed sparse vectors exactly.
+2. **Sparse vectors stored in Qdrant**: collections created with hybrid enabled carry a named `"bm25"` sparse-vector config; each point stores `{"": dense, "bm25": sparse}`.
+3. **Client-side RRF fusion** (`app/retrieval/hybrid.py`): dense and sparse prefetch (default 20 candidates each) are fused with `score = Σ 1/(60 + rank)`; the fused best hit is normalised to `1.0` so the UI's percentage-match display stays meaningful.
+4. **Fail-open**: a missing stats file, a dense-only legacy collection, or a sparse-search error logs a warning and silently degrades to dense-only retrieval.
+5. **Legacy collections**: `ensure_collection(recreate_if_incompatible=True)` drops and re-creates a dense-only collection; by default a warning is logged and hybrid falls back to dense until the collection is re-created and re-ingested.
+
+### Consequences
+- Full hybrid retrieval on Qdrant 1.7 without upgrading the server or client.
+- Ingestion is two-phase: load + chunk *all* files, fit BM25 over the whole run's corpus, then embed + upsert per file.
+- Collection and stats file must be rebuilt together; stale stats are rejected via the persisted format version.
+- **Pending:** end-to-end hybrid evaluation numbers (README metrics table) require a valid `GOOGLE_API_KEY` for embeddings; the dense baseline and hybrid rerun are queued until credentials are available.

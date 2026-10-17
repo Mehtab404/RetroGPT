@@ -85,6 +85,9 @@ services:
       - CHUNK_OVERLAP=${CHUNK_OVERLAP:-120}
       - RETRIEVAL_TOP_K=${RETRIEVAL_TOP_K:-20}
       - RERANK_TOP_N=${RERANK_TOP_N:-5}
+      - HYBRID_SEARCH_ENABLED=${HYBRID_SEARCH_ENABLED:-true}
+      - HYBRID_PREFETCH_K=${HYBRID_PREFETCH_K:-20}
+      - BM25_STATS_PATH=${BM25_STATS_PATH:-/data/bm25_stats.json}
     depends_on:
       qdrant:
         condition: service_healthy

@@ -48,6 +48,9 @@ data/raw/*.pdf
 data/raw/*.tar.gz
 data/raw/*.zip
 
+# Generated BM25 statistics (rebuilt by every ingestion run)
+data/bm25_stats.json
+
 # Vector DB & Cache local data directories
 qdrant_data/
 redis_data/
