@@ -8,7 +8,9 @@ SSM Parameter Store on AWS) — never from files committed to the repo.
 > **Status:** the files and scripts below are complete and validated locally
 > (config parse, image builds, full-stack smoke test). The public-URL
 > acceptance step is **pending an AWS account + credentials**; follow this
-> guide to bring the demo up.
+> guide to bring the demo up. Continuous deployment is wired up in
+> [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml) and activates
+> once the repository secrets in section 5 are configured.
 
 - [Architecture](#architecture)
 - [1. One-time AWS setup](#1-one-time-aws-setup)
@@ -175,18 +177,40 @@ When deploying under a real domain that resolves to the host:
 
 ## 5. Updates and rollback
 
-Deploy a new revision:
+**Continuous deployment**
+([`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml)) automates
+the update path: merging to `main` builds the production images, pushes them
+to ECR tagged with the merge commit's short SHA, SSHes to the host to
+fast-forward the checkout and run `IMAGE_TAG=<sha> ./deploy/remote-deploy.sh`
+(pull + apply + on-host health check), then smoke-tests `/api/health` on
+`DEPLOY_HOST` from the runner.
+
+Until the AWS account exists the deploy job **skips with a notice** that lists
+the missing secrets, so `main` stays green without AWS. Configure these under
+Settings → Secrets and variables → Actions:
+
+| Secret | Required | Purpose |
+|---|---|---|
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | yes | ECR push credentials (least-privilege IAM user) |
+| `ECR_REGISTRY` | yes | `<account>.dkr.ecr.<region>.amazonaws.com` |
+| `API_KEY` | yes | public demo key baked into the frontend bundle |
+| `DEPLOY_HOST` | yes | EC2 public DNS name or IP (smoke-test target) |
+| `DEPLOY_SSH_KEY` | yes | private key for `DEPLOY_USER` (public half in the host's `authorized_keys`) |
+| `AWS_REGION` | no | defaults to `eu-central-1` |
+| `DEPLOY_USER` | no | defaults to `ubuntu` |
+| `DEPLOY_PATH` | no | host checkout, defaults to `/opt/retrogpt` |
+
+**Rollback / redeploy** a specific revision: Actions → *CD* → *Run workflow*
+with `image_tag` set to a previous SHA (images are immutable in ECR). The
+equivalent manual commands:
 
 ```bash
-# CI (#27) does this automatically on merge to main:
-#   build-push.sh -> SSH to host -> remote-deploy.sh
-IMAGE_TAG=<new-sha> ./deploy/remote-deploy.sh
-```
+# Build + push (workstation or CI with AWS credentials)
+API_KEY=<public-demo-key> ECR_REGISTRY=<registry> AWS_REGION=<region> \
+  ./deploy/build-push.sh
 
-Rollback = deploy the previous tag (images are immutable in ECR):
-
-```bash
-IMAGE_TAG=<previous-sha> ./deploy/remote-deploy.sh
+# On the host
+IMAGE_TAG=<sha> ./deploy/remote-deploy.sh
 ```
 
 ---
@@ -212,6 +236,7 @@ traceable end-to-end.
 ## Related
 
 - [`docker-compose.prod.yml`](../docker-compose.prod.yml) — the stack
+- [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml) — continuous deployment (build → ECR → host → smoke test)
 - [`deploy/`](../deploy) — build-push, remote-deploy, Let's Encrypt scripts
 - [`.env.production.example`](../.env.production.example) — secrets template
 - [ADR 0005](../docs/decisions.md) — structured logging / request IDs

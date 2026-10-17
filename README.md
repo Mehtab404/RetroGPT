@@ -317,9 +317,11 @@ curl http://localhost/api/health
 See [`docs/deployment.md`](./docs/deployment.md) for the full AWS walkthrough
 (ECR, security group, SSM secrets, ingestion, renewals, rollback).
 
-> **Status:** the production stack, scripts and docs are complete and verified
-> locally; the public demo URL and the CD pipeline (#27) are **pending an AWS
-> account + credentials + domain**.
+> **Status:** the production stack, scripts, docs and CD workflow are complete
+> and validated locally; the public demo URL is **pending an AWS account +
+> credentials + domain**. Merging to `main` deploys automatically through
+> [`.github/workflows/deploy.yml`](./.github/workflows/deploy.yml) — it skips
+> with a notice until the repository secrets in the deployment guide are set.
 
 ### Environment Variables (Production)
 
@@ -484,7 +486,7 @@ This is a portfolio/learning project. Contributions are welcome!
 - [x] M2: API gateway (auth, caching, sessions)
 - [x] M3: Frontend UI
 - [x] M4: Evaluation suite and quality improvements
-- [ ] M5: Production deployment (AWS + CI/CD) — structured logging (#24) and production compose (#26) done; CD pipeline (#27) + public URL pending AWS credentials
+- [ ] M5: Production deployment (AWS + CI/CD) — structured logging, production compose and the CD workflow (`deploy.yml`) done; public URL pending AWS credentials
 - [ ] M6: Polish (load tests, documentation) — streaming done (#25)
 
 See [GitHub Issues](https://github.com/YOUR_USERNAME/retrogpt/issues) for detailed task breakdown.
