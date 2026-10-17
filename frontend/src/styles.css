@@ -1,0 +1,365 @@
+/* RetroGPT chat UI — retro-arcade-flavoured dark theme.
+   Colour contrast targets WCAG AA for normal text. */
+
+:root {
+  --bg: #0f172a;
+  --surface: #1e293b;
+  --surface-2: #273449;
+  --text: #e2e8f0;
+  --text-muted: #9aa8bd;
+  --accent: #4ade80;
+  --accent-contrast: #052e16;
+  --link: #93c5fd;
+  --danger-bg: #4c1d1d;
+  --danger-text: #fecaca;
+  --user-bubble: #1d4ed8;
+  --user-text: #ffffff;
+  --highlight: #854d0e;
+  --border: #334155;
+  --focus: #facc15;
+  font-family:
+    'Segoe UI',
+    system-ui,
+    -apple-system,
+    sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* ------------------------------------------------------------------ */
+/* Layout                                                              */
+/* ------------------------------------------------------------------ */
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 0 16px;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 0 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.app-title h1 {
+  margin: 0;
+  font-size: 1.6rem;
+  letter-spacing: 0.02em;
+}
+
+.app-subtitle {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.new-chat-button {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 8px 14px;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.new-chat-button:hover {
+  background: rgba(74, 222, 128, 0.12);
+}
+
+.chat-window {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Transcript                                                          */
+/* ------------------------------------------------------------------ */
+
+.transcript {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.empty-state {
+  margin: 48px auto;
+  max-width: 520px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.empty-state h2 {
+  color: var(--text);
+}
+
+.message {
+  border-radius: 10px;
+  padding: 12px 16px;
+  max-width: 85%;
+  word-wrap: break-word;
+}
+
+.message-user {
+  align-self: flex-end;
+  background: var(--user-bubble);
+  color: var(--user-text);
+}
+
+.message-assistant {
+  align-self: flex-start;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.message-role {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  opacity: 0.85;
+  margin-bottom: 6px;
+}
+
+.message-content {
+  white-space: pre-wrap;
+  line-height: 1.55;
+}
+
+.citation-link {
+  display: inline;
+  background: none;
+  border: none;
+  padding: 0 2px;
+  color: var(--link);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline dotted;
+}
+
+.citation-link:hover {
+  text-decoration: underline solid;
+}
+
+/* ------------------------------------------------------------------ */
+/* Sources                                                             */
+/* ------------------------------------------------------------------ */
+
+.sources {
+  margin-top: 12px;
+  border-top: 1px dashed var(--border);
+  padding-top: 8px;
+}
+
+.sources h3 {
+  margin: 0 0 8px;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+.sources ol {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.source {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  transition:
+    background-color 0.3s ease,
+    border-color 0.3s ease;
+}
+
+.source-highlighted {
+  background: var(--highlight);
+  border-color: var(--accent);
+}
+
+.source-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 0.85rem;
+}
+
+.source-number {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.source-title {
+  font-weight: 600;
+}
+
+.source-score {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.source-snippet {
+  margin: 6px 0 0;
+  color: var(--text-muted);
+  font-size: 0.83rem;
+  line-height: 1.45;
+}
+
+/* ------------------------------------------------------------------ */
+/* Status                                                              */
+/* ------------------------------------------------------------------ */
+
+.typing-indicator {
+  align-self: flex-start;
+  color: var(--text-muted);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-style: italic;
+}
+
+.typing-dots {
+  letter-spacing: 4px;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.error-banner {
+  background: var(--danger-bg);
+  color: var(--danger-text);
+  border: 1px solid #991b1b;
+  border-radius: 8px;
+  padding: 10px 14px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Composer                                                            */
+/* ------------------------------------------------------------------ */
+
+.composer {
+  padding: 12px 0 20px;
+  border-top: 1px solid var(--border);
+}
+
+.composer-label {
+  display: block;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.composer-row {
+  display: flex;
+  gap: 10px;
+}
+
+.composer-row input {
+  flex: 1;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  font-size: 1rem;
+}
+
+.composer-row input::placeholder {
+  color: var(--text-muted);
+}
+
+.composer-row button {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border: none;
+  border-radius: 8px;
+  padding: 12px 22px;
+  font-size: 1rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.composer-row button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.composer-row input:disabled {
+  opacity: 0.7;
+}
+
+/* Visible keyboard focus everywhere. */
+:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Footer                                                              */
+/* ------------------------------------------------------------------ */
+
+.app-footer {
+  padding: 8px 0 14px;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  text-align: center;
+  border-top: 1px solid var(--border);
+}
+
+.app-footer p {
+  margin: 6px 0 0;
+}
+
+/* Respect reduced-motion preferences. */
+@media (prefers-reduced-motion: reduce) {
+  .typing-dots {
+    animation: none;
+  }
+
+  .source {
+    transition: none;
+  }
+}
