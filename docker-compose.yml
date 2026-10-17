@@ -98,6 +98,45 @@ services:
     networks:
       - retrogpt-network
 
+  # API Gateway - Node.js + TypeScript gateway
+  api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+      target: development
+    container_name: retrogpt-api-gateway
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./api-gateway/src:/app/src
+      - /app/node_modules
+    environment:
+      - NODE_ENV=development
+      - PORT=4000
+      - CORS_ORIGIN=*
+      - AI_SERVICE_URL=http://ai-service:8000
+      - API_KEY=${API_KEY:-change-me}
+      - REDIS_URL=redis://redis:6379
+      - MONGO_URL=mongodb://mongo:27017/retrogpt
+      - CACHE_TTL_SECONDS=${CACHE_TTL_SECONDS:-86400}
+      - RATE_LIMIT_PER_MIN=${RATE_LIMIT_PER_MIN:-30}
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      ai-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:4000/api/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - retrogpt-network
+
 # Named volumes for data persistence
 volumes:
   qdrant_data:
