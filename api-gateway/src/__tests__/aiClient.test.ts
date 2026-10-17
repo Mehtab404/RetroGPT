@@ -103,10 +103,7 @@ describe('aiClient.queryAiService', () => {
     const question = 'How many shields does Centipede have?';
     await queryAiService({ question });
 
-    expect(mockInstance.post).toHaveBeenCalledWith(
-      '/query',
-      expect.objectContaining({ question }),
-    );
+    expect(mockInstance.post).toHaveBeenCalledWith('/query', expect.objectContaining({ question }));
   });
 
   it('passes optional game_slug field to the AI service', async () => {
@@ -127,10 +124,7 @@ describe('aiClient.queryAiService', () => {
 
   it('retries once on a 500 error and returns the successful response', async () => {
     const expected = makeAiResponse();
-    const mockInstance = makeMockInstance([
-      { reject: makeHttpError(500) },
-      { resolve: expected },
-    ]);
+    const mockInstance = makeMockInstance([{ reject: makeHttpError(500) }, { resolve: expected }]);
     setAxiosInstance(mockInstance);
 
     // Bypass the real sleep to keep tests fast
@@ -188,9 +182,7 @@ describe('aiClient.queryAiService', () => {
     const mockInstance = makeMockInstance([{ reject: clientError }]);
     setAxiosInstance(mockInstance);
 
-    await expect(
-      queryAiService({ question: 'Client error test' }),
-    ).rejects.toThrow();
+    await expect(queryAiService({ question: 'Client error test' })).rejects.toThrow();
 
     expect(mockInstance.post).toHaveBeenCalledTimes(1);
   });
@@ -200,9 +192,7 @@ describe('aiClient.queryAiService', () => {
     const mockInstance = makeMockInstance([{ reject: validationError }]);
     setAxiosInstance(mockInstance);
 
-    await expect(
-      queryAiService({ question: 'Validation error test' }),
-    ).rejects.toThrow();
+    await expect(queryAiService({ question: 'Validation error test' })).rejects.toThrow();
 
     expect(mockInstance.post).toHaveBeenCalledTimes(1);
   });
@@ -210,10 +200,7 @@ describe('aiClient.queryAiService', () => {
   it('retries on a network error (no response)', async () => {
     const networkErr = makeNetworkError('ECONNRESET');
     const expected = makeAiResponse();
-    const mockInstance = makeMockInstance([
-      { reject: networkErr },
-      { resolve: expected },
-    ]);
+    const mockInstance = makeMockInstance([{ reject: networkErr }, { resolve: expected }]);
     setAxiosInstance(mockInstance);
 
     jest.spyOn(global, 'setTimeout').mockImplementation((fn) => {

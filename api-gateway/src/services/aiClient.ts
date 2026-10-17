@@ -101,17 +101,12 @@ export function resetAxiosInstance(): void {
  * Retries up to {@link MAX_RETRIES} times on transient / 5xx errors using
  * exponential back-off, then re-throws the last error.
  */
-export async function queryAiService(
-  request: AiQueryRequest,
-): Promise<AiQueryResponse> {
+export async function queryAiService(request: AiQueryRequest): Promise<AiQueryResponse> {
   let lastError: AxiosError | null = null;
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
-      const response = await axiosInstance.post<AiQueryResponse>(
-        '/query',
-        request,
-      );
+      const response = await axiosInstance.post<AiQueryResponse>('/query', request);
       return response.data;
     } catch (err) {
       const axiosErr = err as AxiosError;

@@ -119,9 +119,7 @@ export function buildCacheKey(question: string): string {
  * @returns The parsed {@link CachedResponse} on a hit, or `null` on a miss
  *          or any Redis error.
  */
-export async function getCachedResponse(
-  question: string,
-): Promise<CachedResponse | null> {
+export async function getCachedResponse(question: string): Promise<CachedResponse | null> {
   const client = await getRedisClient();
   if (client === null) return null;
 

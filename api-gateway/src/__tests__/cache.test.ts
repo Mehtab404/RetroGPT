@@ -54,11 +54,13 @@ function makeCachedResponse(overrides: Partial<CachedResponse> = {}): CachedResp
 }
 
 /** Build a mock Redis client with jest.fn() for `get`, `set`, and `quit`. */
-function makeMockClient(overrides: {
-  get?: jest.Mock;
-  set?: jest.Mock;
-  quit?: jest.Mock;
-} = {}): RedisClientType {
+function makeMockClient(
+  overrides: {
+    get?: jest.Mock;
+    set?: jest.Mock;
+    quit?: jest.Mock;
+  } = {},
+): RedisClientType {
   return {
     get: overrides.get ?? jest.fn(),
     set: overrides.set ?? jest.fn().mockResolvedValue('OK'),
@@ -181,9 +183,7 @@ describe('setCachedResponse()', () => {
     // createClient().connect() is mocked to reject → getRedisClient returns null
     setRedisClient(null);
     const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-    await expect(
-      setCachedResponse('What is Pong?', makeCachedResponse()),
-    ).resolves.toBeUndefined();
+    await expect(setCachedResponse('What is Pong?', makeCachedResponse())).resolves.toBeUndefined();
     consoleSpy.mockRestore();
   });
 
@@ -198,11 +198,7 @@ describe('setCachedResponse()', () => {
     await setCachedResponse(question, payload, ttl);
 
     const expectedKey = buildCacheKey(question);
-    expect(mockSet).toHaveBeenCalledWith(
-      expectedKey,
-      JSON.stringify(payload),
-      { EX: ttl },
-    );
+    expect(mockSet).toHaveBeenCalledWith(expectedKey, JSON.stringify(payload), { EX: ttl });
   });
 
   it('uses config.cacheTtlSeconds when no explicit TTL is provided', async () => {

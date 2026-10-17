@@ -29,8 +29,12 @@ async function start(): Promise<void> {
     });
   }
 
-  process.on('SIGTERM', () => { void shutdown('SIGTERM'); });
-  process.on('SIGINT',  () => { void shutdown('SIGINT'); });
+  process.on('SIGTERM', () => {
+    void shutdown('SIGTERM');
+  });
+  process.on('SIGINT', () => {
+    void shutdown('SIGINT');
+  });
 }
 
 // Handle uncaught exceptions

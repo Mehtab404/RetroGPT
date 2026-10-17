@@ -101,10 +101,7 @@ describe('db/mongo', () => {
       // Verify the 'error' listener was registered by firing it
       const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
       mockConnection.emit('error', new Error('test error'));
-      expect(errorSpy).toHaveBeenCalledWith(
-        '[MongoDB] connection error:',
-        expect.any(Error),
-      );
+      expect(errorSpy).toHaveBeenCalledWith('[MongoDB] connection error:', expect.any(Error));
       errorSpy.mockRestore();
     });
 

@@ -75,9 +75,8 @@ router.get(
         } = {
           role: msg.role,
           content: msg.content,
-          createdAt: msg.createdAt instanceof Date
-            ? msg.createdAt.toISOString()
-            : String(msg.createdAt),
+          createdAt:
+            msg.createdAt instanceof Date ? msg.createdAt.toISOString() : String(msg.createdAt),
         };
 
         if (msg.sources && msg.sources.length > 0) {
