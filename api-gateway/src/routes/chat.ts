@@ -20,6 +20,7 @@ import { getCachedResponse, setCachedResponse } from '../services/cache';
 import { AppError } from '../middleware/errorHandler';
 import { AxiosError } from 'axios';
 import { Session } from '../models/session';
+import { logger } from '../utils/logger';
 
 // ---------------------------------------------------------------------------
 // Validation schema
@@ -75,7 +76,21 @@ router.post('/chat', async (req: Request, res: Response, next: NextFunction): Pr
   const cached = await getCachedResponse(question);
   if (cached !== null) {
     // Cache hit — persist the exchange and return immediately
-    await persistMessages(resolvedSessionId, question, cached.answer, cached.sources);
+    await persistMessages(
+      resolvedSessionId,
+      question,
+      cached.answer,
+      cached.sources,
+      req.requestId,
+    );
+
+    logger.info('chat_completed', {
+      request_id: req.requestId,
+      cached: true,
+      latency_ms: cached.latency_ms,
+      sources: cached.sources.length,
+      question_chars: question.length,
+    });
 
     res.status(200).json({
       sessionId: resolvedSessionId,
@@ -89,7 +104,9 @@ router.post('/chat', async (req: Request, res: Response, next: NextFunction): Pr
 
   // 3. Cache miss — proxy to AI service
   try {
-    const aiResponse = await queryAiService({ question });
+    const upstreamStart = Date.now();
+    const aiResponse = await queryAiService({ question }, req.requestId);
+    const upstreamMs = Date.now() - upstreamStart;
 
     // 4. Store in Redis (fire-and-forget; errors are swallowed inside)
     await setCachedResponse(question, {
@@ -99,7 +116,22 @@ router.post('/chat', async (req: Request, res: Response, next: NextFunction): Pr
     });
 
     // 5. Persist messages to MongoDB (non-blocking to response)
-    await persistMessages(resolvedSessionId, question, aiResponse.answer, aiResponse.sources);
+    await persistMessages(
+      resolvedSessionId,
+      question,
+      aiResponse.answer,
+      aiResponse.sources,
+      req.requestId,
+    );
+
+    logger.info('chat_completed', {
+      request_id: req.requestId,
+      cached: false,
+      latency_ms: aiResponse.latency_ms,
+      upstream_ms: upstreamMs,
+      sources: aiResponse.sources.length,
+      question_chars: question.length,
+    });
 
     // 6. Respond
     res.status(200).json({
@@ -119,6 +151,10 @@ router.post('/chat', async (req: Request, res: Response, next: NextFunction): Pr
 
         if (status === 422) {
           // Validation error from AI service — pass through as 400
+          logger.warn('chat_upstream_rejected', {
+            request_id: req.requestId,
+            upstream_status: status,
+          });
           res.status(400).json({
             error: {
               code: 'VALIDATION_ERROR',
@@ -176,6 +212,7 @@ async function persistMessages(
   question: string,
   answer: string,
   sources: { id: string; title: string; score: number; snippet: string }[],
+  requestId: string,
 ): Promise<void> {
   try {
     const now = new Date();
@@ -194,7 +231,11 @@ async function persistMessages(
       { upsert: true, new: true },
     );
   } catch (err) {
-    console.error('[chat] failed to persist session messages:', err);
+    logger.error('session_persist_failed', {
+      request_id: requestId,
+      error: err,
+      session_id: sessionId,
+    });
   }
 }
 

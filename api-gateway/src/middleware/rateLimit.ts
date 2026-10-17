@@ -25,6 +25,7 @@ import { Request, Response, NextFunction } from 'express';
 import { getRedisClient } from '../services/cache';
 import { config } from '../config';
 import { RateLimitError } from './errorHandler';
+import { logger } from '../utils/logger';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -104,7 +105,7 @@ export function rateLimit(options: RateLimitOptions = {}) {
       next();
     } catch (err) {
       // Redis errors must not reject traffic — fail open and keep serving.
-      console.warn('[rateLimit] Redis error, allowing request:', (err as Error).message);
+      logger.warn('ratelimit_redis_error', { request_id: req.requestId, error: err });
       next();
     }
   };

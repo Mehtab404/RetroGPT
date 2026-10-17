@@ -1,5 +1,6 @@
 """RetroGPT AI Service - FastAPI application."""
 
+import logging
 import time
 from typing import Any
 
@@ -12,9 +13,13 @@ from app.config import settings
 from app.generation.llm import LLMError, get_llm_provider
 from app.generation.prompts import build_rag_prompt
 from app.ingestion.embeddings import EmbeddingError, get_embedding_provider
+from app.logging_config import configure_logging
+from app.middleware import RequestIdMiddleware
 from app.retrieval.rerank import retrieve
 from app.retrieval.vector_store import QdrantVectorStore, VectorStoreError
 from app.schemas import QueryRequest, QueryResponse, SourceDoc
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="RetroGPT AI Service",
@@ -23,6 +28,11 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
 )
+
+# Issue #24: JSON logs in both services; x-request-id ties gateway call,
+# retrieval and generation logs together under one trace id.
+configure_logging()
+app.add_middleware(RequestIdMiddleware)
 
 # CORS middleware for API gateway
 app.add_middleware(
@@ -45,9 +55,9 @@ async def startup_event() -> None:
         qdrant_client = QdrantClient(url=settings.qdrant_url)
         # Test connection
         qdrant_client.get_collections()
-        print(f"✓ Connected to Qdrant at {settings.qdrant_url}")
+        logger.info("qdrant_connected", extra={"url": settings.qdrant_url})
     except Exception as e:
-        print(f"✗ Failed to connect to Qdrant: {e}")
+        logger.error("qdrant_connection_failed", extra={"error": str(e)})
         # Don't fail startup, allow health check to report status
 
 
@@ -57,7 +67,7 @@ async def shutdown_event() -> None:
     global qdrant_client
     if qdrant_client:
         qdrant_client.close()
-        print("✓ Closed Qdrant connection")
+        logger.info("qdrant_connection_closed")
 
 
 @app.get("/health")
@@ -128,11 +138,14 @@ async def query(request: QueryRequest) -> QueryResponse:
         HTTPException 500: On unexpected internal errors.
     """
     t_start = time.monotonic()
+    stage_ms: dict[str, float] = {}
+    retrieve_timings: dict[str, float] = {}
 
     # ------------------------------------------------------------------
     # 1. Embed the question
     # ------------------------------------------------------------------
     embedder = get_embedding_provider()
+    t_stage = time.monotonic()
     try:
         query_vector = await embedder.embed_query(request.question)
     except EmbeddingError as exc:
@@ -140,6 +153,7 @@ async def query(request: QueryRequest) -> QueryResponse:
             status_code=502,
             detail=f"Embedding provider error: {exc}",
         ) from exc
+    stage_ms["embed"] = _elapsed_ms(t_stage)
 
     # ------------------------------------------------------------------
     # 2. Retrieve relevant passages from the vector store
@@ -162,29 +176,41 @@ async def query(request: QueryRequest) -> QueryResponse:
 
     vector_store = QdrantVectorStore(client=qdrant_client)
     try:
+        # ``retrieve`` reports the hybrid-search and re-rank split via
+        # ``retrieve_timings`` (Issue #24 stage observability).
         search_results = await retrieve(
             vector_store,
             request.question,
             query_vector,
             top_k=request.top_k,
             filter=qdrant_filter,
+            timings=retrieve_timings,
         )
     except VectorStoreError as exc:
         raise HTTPException(
             status_code=503,
             detail=f"Vector store error: {exc}",
         ) from exc
+    stage_ms["retrieve"] = retrieve_timings.get("hybrid_search_ms", 0.0)
+    stage_ms["rerank"] = retrieve_timings.get("rerank_ms", 0.0)
 
     # ------------------------------------------------------------------
     # 3. Build the RAG prompt
     # ------------------------------------------------------------------
     if not search_results:
         # No relevant passages found — return a graceful "no context" answer.
-        t_end = time.monotonic()
+        total_ms = _elapsed_ms(t_start)
+        _log_query(
+            stage_ms=stage_ms,
+            result_count=0,
+            total_ms=total_ms,
+            game_slug=request.game_slug,
+            top_k=request.top_k,
+        )
         return QueryResponse(
             answer="I don't know — this information is not available in the provided sources.",
             sources=[],
-            latency_ms=(t_end - t_start) * 1000,
+            latency_ms=total_ms,
         )
 
     context_passages = [
@@ -203,6 +229,7 @@ async def query(request: QueryRequest) -> QueryResponse:
     # 4. Generate an answer
     # ------------------------------------------------------------------
     llm = get_llm_provider()
+    t_stage = time.monotonic()
     try:
         answer = await llm.generate(prompt)
     except LLMError as exc:
@@ -210,11 +237,20 @@ async def query(request: QueryRequest) -> QueryResponse:
             status_code=502,
             detail=f"LLM provider error: {exc}",
         ) from exc
+    stage_ms["generate"] = _elapsed_ms(t_stage)
 
     # ------------------------------------------------------------------
     # 5. Build response with sources
     # ------------------------------------------------------------------
-    t_end = time.monotonic()
+    total_ms = _elapsed_ms(t_start)
+
+    _log_query(
+        stage_ms=stage_ms,
+        result_count=len(search_results),
+        total_ms=total_ms,
+        game_slug=request.game_slug,
+        top_k=request.top_k,
+    )
 
     sources = [
         SourceDoc(
@@ -230,5 +266,31 @@ async def query(request: QueryRequest) -> QueryResponse:
     return QueryResponse(
         answer=answer,
         sources=sources,
-        latency_ms=round((t_end - t_start) * 1000, 2),
+        latency_ms=round(total_ms, 2),
+    )
+
+
+def _elapsed_ms(start: float) -> float:
+    """Milliseconds elapsed since a ``time.monotonic()`` reading."""
+    return (time.monotonic() - start) * 1000.0
+
+
+def _log_query(
+    *,
+    stage_ms: dict[str, float],
+    result_count: int,
+    total_ms: float,
+    game_slug: str | None,
+    top_k: int | None,
+) -> None:
+    """Emit one structured ``query`` event with per-stage latencies (#24)."""
+    logger.info(
+        "query",
+        extra={
+            "stage_ms": {stage: round(value, 2) for stage, value in stage_ms.items()},
+            "result_count": result_count,
+            "total_ms": round(total_ms, 2),
+            "game_slug": game_slug,
+            "top_k": top_k,
+        },
     )

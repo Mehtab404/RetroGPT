@@ -16,6 +16,7 @@ import {
   CachedResponse,
 } from '../services/cache';
 import { RedisClientType } from 'redis';
+import { logger } from '../utils/logger';
 
 // ---------------------------------------------------------------------------
 // Mock the entire `redis` package so no real TCP connections are attempted.
@@ -113,9 +114,9 @@ describe('getCachedResponse()', () => {
     // Client is null; getRedisClient() will try createClient().connect() which
     // is mocked to reject — so it returns null.
     setRedisClient(null);
-    const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => undefined);
     const result = await getCachedResponse('What is Pong?');
-    consoleSpy.mockRestore();
+    errorSpy.mockRestore();
     expect(result).toBeNull();
   });
 
@@ -151,9 +152,10 @@ describe('getCachedResponse()', () => {
     const mockGet = jest.fn().mockRejectedValue(new Error('RESP3 parse error'));
     setRedisClient(makeMockClient({ get: mockGet }));
 
-    const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => undefined);
     const result = await getCachedResponse('What is Pong?');
-    consoleSpy.mockRestore();
+    expect(errorSpy).toHaveBeenCalledWith('cache_read_failed', { error: expect.any(Error) });
+    errorSpy.mockRestore();
 
     expect(result).toBeNull();
   });
@@ -182,9 +184,9 @@ describe('setCachedResponse()', () => {
   it('is a no-op when no Redis client is available', async () => {
     // createClient().connect() is mocked to reject → getRedisClient returns null
     setRedisClient(null);
-    const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => undefined);
     await expect(setCachedResponse('What is Pong?', makeCachedResponse())).resolves.toBeUndefined();
-    consoleSpy.mockRestore();
+    errorSpy.mockRestore();
   });
 
   it('calls Redis.set with the correct key, JSON value, and EX option', async () => {
@@ -216,11 +218,12 @@ describe('setCachedResponse()', () => {
     const mockSet = jest.fn().mockRejectedValue(new Error('OOM'));
     setRedisClient(makeMockClient({ set: mockSet }));
 
-    const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => undefined);
     await expect(
       setCachedResponse('What is Breakout?', makeCachedResponse()),
     ).resolves.toBeUndefined();
-    consoleSpy.mockRestore();
+    expect(errorSpy).toHaveBeenCalledWith('cache_write_failed', { error: expect.any(Error) });
+    errorSpy.mockRestore();
   });
 });
 
@@ -255,9 +258,9 @@ describe('disconnectRedis()', () => {
 
     // After disconnect the singleton is null — a subsequent get call returns null
     // (createClient().connect() is mocked to reject → null)
-    const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => undefined);
     const result = await getCachedResponse('test');
-    consoleSpy.mockRestore();
+    errorSpy.mockRestore();
     expect(result).toBeNull();
   });
 
@@ -265,8 +268,9 @@ describe('disconnectRedis()', () => {
     const mockQuit = jest.fn().mockRejectedValue(new Error('already closed'));
     setRedisClient(makeMockClient({ quit: mockQuit }));
 
-    const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => undefined);
     await expect(disconnectRedis()).resolves.toBeUndefined();
-    consoleSpy.mockRestore();
+    expect(errorSpy).toHaveBeenCalledWith('cache_disconnect_failed', { error: expect.any(Error) });
+    errorSpy.mockRestore();
   });
 });

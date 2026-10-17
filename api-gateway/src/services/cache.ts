@@ -17,6 +17,7 @@
 import { createClient, RedisClientType } from 'redis';
 import { createHash } from 'crypto';
 import { config } from '../config';
+import { logger } from '../utils/logger';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -55,7 +56,7 @@ export async function getRedisClient(): Promise<RedisClientType | null> {
   const client = createClient({ url: config.redisUrl }) as RedisClientType;
 
   client.on('error', (err: Error) => {
-    console.error('[cache] Redis client error:', err.message);
+    logger.error('cache_client_error', { error: err });
   });
 
   try {
@@ -63,7 +64,7 @@ export async function getRedisClient(): Promise<RedisClientType | null> {
     redisClient = client;
     return redisClient;
   } catch (err) {
-    console.error('[cache] Failed to connect to Redis:', (err as Error).message);
+    logger.error('cache_connection_failed', { error: err });
     return null;
   }
 }
@@ -78,7 +79,7 @@ export async function disconnectRedis(): Promise<void> {
   try {
     await redisClient.quit();
   } catch (err) {
-    console.error('[cache] Error disconnecting Redis:', (err as Error).message);
+    logger.error('cache_disconnect_failed', { error: err });
   } finally {
     redisClient = null;
   }
@@ -130,7 +131,7 @@ export async function getCachedResponse(question: string): Promise<CachedRespons
     if (raw === null) return null;
     return JSON.parse(raw) as CachedResponse;
   } catch (err) {
-    console.error('[cache] Error reading from Redis:', (err as Error).message);
+    logger.error('cache_read_failed', { error: err });
     return null;
   }
 }
@@ -157,6 +158,6 @@ export async function setCachedResponse(
   try {
     await client.set(key, JSON.stringify(response), { EX: ttlSeconds });
   } catch (err) {
-    console.error('[cache] Error writing to Redis:', (err as Error).message);
+    logger.error('cache_write_failed', { error: err });
   }
 }

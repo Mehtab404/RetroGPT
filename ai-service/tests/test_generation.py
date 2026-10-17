@@ -24,6 +24,8 @@ pytest-mock / unittest.mock.  asyncio tests use pytest-asyncio.
 
 from __future__ import annotations
 
+import json
+import logging
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -40,6 +42,7 @@ from app.generation.llm import (
     get_llm_provider,
 )
 from app.generation.prompts import RAG_SYSTEM_PROMPT, build_rag_prompt
+from app.logging_config import JsonFormatter
 from app.main import app
 from app.retrieval.vector_store import SearchResult
 from app.schemas import QueryRequest, QueryResponse, SourceDoc
@@ -1002,3 +1005,96 @@ class TestQueryEndpointErrors:
 
         call_kwargs = mock_vs.search.call_args[1]
         assert call_kwargs["filter"] is None
+
+
+# ---------------------------------------------------------------------------
+# POST /query — structured observability (Issue #24)
+# ---------------------------------------------------------------------------
+
+
+class _JsonCaptureHandler(logging.Handler):
+    """Collects :class:`JsonFormatter` payloads at emission time.
+
+    The request-id contextvar is reset when the request finishes, so
+    re-formatting a captured record after the fact cannot see it — this
+    handler formats (and parses) each record exactly when it is emitted,
+    matching production behaviour.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.INFO)
+        self.setFormatter(JsonFormatter())
+        self.payloads: list[dict[str, Any]] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.payloads.append(json.loads(self.format(record)))
+
+
+class TestQueryObservability:
+    """Issue #24: /query emits one structured event with stage latencies."""
+
+    def test_query_logs_stage_latencies_and_request_id(self) -> None:
+        search_result = _make_search_result(chunk_id="asteroids_p3_c2", score=0.91)
+
+        with (
+            patch("app.main.get_embedding_provider") as mock_embed_factory,
+            patch("app.main.QdrantVectorStore") as mock_vs_cls,
+            patch("app.main.get_llm_provider") as mock_llm_factory,
+        ):
+            mock_embedder = AsyncMock()
+            mock_embedder.embed_query = AsyncMock(return_value=[0.1] * 768)
+            mock_embed_factory.return_value = mock_embedder
+
+            mock_vs = AsyncMock()
+            mock_vs.search = AsyncMock(return_value=[search_result])
+            mock_vs_cls.return_value = mock_vs
+
+            mock_llm = AsyncMock()
+            mock_llm.generate = AsyncMock(return_value="An answer [1].")
+            mock_llm_factory.return_value = mock_llm
+
+            handler = _JsonCaptureHandler()
+            main_logger = logging.getLogger("app.main")
+            main_logger.addHandler(handler)
+            try:
+                response = client.post(
+                    "/query",
+                    json={"question": "How do you score in Asteroids?"},
+                    headers={"x-request-id": "trace-query-1"},
+                )
+            finally:
+                main_logger.removeHandler(handler)
+
+        assert response.status_code == 200
+        event = next(p for p in handler.payloads if p["event"] == "query")
+        assert event["request_id"] == "trace-query-1"
+        assert set(event["stage_ms"]) == {"embed", "retrieve", "rerank", "generate"}
+        assert all(value >= 0.0 for value in event["stage_ms"].values())
+        assert event["result_count"] == 1
+        assert event["total_ms"] >= 0.0
+
+    def test_no_context_logs_without_generate_stage(self) -> None:
+        with (
+            patch("app.main.get_embedding_provider") as mock_embed_factory,
+            patch("app.main.QdrantVectorStore") as mock_vs_cls,
+        ):
+            mock_embedder = AsyncMock()
+            mock_embedder.embed_query = AsyncMock(return_value=[0.1] * 768)
+            mock_embed_factory.return_value = mock_embedder
+
+            mock_vs = AsyncMock()
+            mock_vs.search = AsyncMock(return_value=[])
+            mock_vs_cls.return_value = mock_vs
+
+            handler = _JsonCaptureHandler()
+            main_logger = logging.getLogger("app.main")
+            main_logger.addHandler(handler)
+            try:
+                response = client.post("/query", json={"question": "q?"})
+            finally:
+                main_logger.removeHandler(handler)
+
+        assert response.status_code == 200
+        event = next(p for p in handler.payloads if p["event"] == "query")
+        assert set(event["stage_ms"]) == {"embed", "retrieve", "rerank"}
+        assert event["result_count"] == 0

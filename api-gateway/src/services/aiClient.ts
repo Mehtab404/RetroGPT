@@ -98,15 +98,27 @@ export function resetAxiosInstance(): void {
 /**
  * Send a query to the AI service `POST /query` endpoint.
  *
+ * @param request   - Validated query payload.
+ * @param requestId - Optional trace id forwarded as `x-request-id` so the
+ *   gateway and AI service logs can be joined (Issue #24).
+ *
  * Retries up to {@link MAX_RETRIES} times on transient / 5xx errors using
- * exponential back-off, then re-throws the last error.
+ * exponential back-off, then re-throws the last error.  The same request
+ * id is reused across attempts.
  */
-export async function queryAiService(request: AiQueryRequest): Promise<AiQueryResponse> {
+export async function queryAiService(
+  request: AiQueryRequest,
+  requestId?: string,
+): Promise<AiQueryResponse> {
   let lastError: AxiosError | null = null;
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
-      const response = await axiosInstance.post<AiQueryResponse>('/query', request);
+      const response = requestId
+        ? await axiosInstance.post<AiQueryResponse>('/query', request, {
+            headers: { 'x-request-id': requestId },
+          })
+        : await axiosInstance.post<AiQueryResponse>('/query', request);
       return response.data;
     } catch (err) {
       const axiosErr = err as AxiosError;

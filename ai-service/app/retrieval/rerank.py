@@ -32,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import time
 from collections.abc import Sequence
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any
@@ -193,6 +194,7 @@ async def retrieve(
     query_vector: Sequence[float],
     top_k: int | None = None,
     filter: qdrant_models.Filter | None = None,
+    timings: dict[str, float] | None = None,
 ) -> list[SearchResult]:
     """Run the two-stage retrieval pipeline: hybrid recall → re-rank.
 
@@ -208,6 +210,10 @@ async def retrieve(
         top_k:        Number of passages to return after re-ranking
                       (defaults to ``settings.rerank_top_n``).
         filter:       Optional Qdrant payload filter (e.g. game slug).
+        timings:      Optional mapping populated in-place with the stage
+                      timings in milliseconds (``hybrid_search_ms``,
+                      ``rerank_ms``; the latter is ``0.0`` when no
+                      re-ranker is configured) — Issue #24.
 
     Returns:
         Best passages, most relevant first.
@@ -217,14 +223,24 @@ async def retrieve(
     """
     final_k = top_k if top_k is not None else settings.rerank_top_n
     candidates_k = max(final_k, settings.retrieval_top_k)
+
+    hybrid_start = time.monotonic()
     candidates = await hybrid_search(store, query, query_vector, top_k=candidates_k, filter=filter)
+    if timings is not None:
+        timings["hybrid_search_ms"] = (time.monotonic() - hybrid_start) * 1000.0
 
     reranker = get_reranker()
     if reranker is None:
+        if timings is not None:
+            timings["rerank_ms"] = 0.0
         return candidates[:final_k]
 
+    rerank_start = time.monotonic()
     try:
-        return await reranker.rerank(query, candidates, top_n=final_k)
+        reranked = await reranker.rerank(query, candidates, top_n=final_k)
     except RerankError as exc:
         logger.warning("Re-ranking failed; using hybrid RRF order: %s", exc)
-        return candidates[:final_k]
+        reranked = candidates[:final_k]
+    if timings is not None:
+        timings["rerank_ms"] = (time.monotonic() - rerank_start) * 1000.0
+    return reranked

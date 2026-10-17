@@ -10,6 +10,7 @@ import axios, { AxiosError } from 'axios';
 import app from '../app';
 import * as aiClient from '../services/aiClient';
 import * as cache from '../services/cache';
+import { logger } from '../utils/logger';
 
 // Mock Session model so no real MongoDB calls are made in chat tests
 jest.mock('../models/session', () => ({
@@ -155,7 +156,10 @@ describe('POST /api/chat', () => {
       await request(app).post('/api/chat').set('x-api-key', API_KEY).send({ question });
 
       expect(querySpy).toHaveBeenCalledTimes(1);
-      expect(querySpy).toHaveBeenCalledWith(expect.objectContaining({ question }));
+      expect(querySpy).toHaveBeenCalledWith(
+        expect.objectContaining({ question }),
+        expect.any(String),
+      );
     });
 
     it('accepts a question at the minimum length boundary (3 chars)', async () => {
@@ -187,6 +191,82 @@ describe('POST /api/chat', () => {
         score: expect.any(Number),
         snippet: expect.any(String),
       });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Request tracing (Issue #24)
+  // -------------------------------------------------------------------------
+
+  describe('request tracing', () => {
+    it('forwards x-request-id to the AI service and echoes it', async () => {
+      const res = await request(app)
+        .post('/api/chat')
+        .set('x-api-key', API_KEY)
+        .set('x-request-id', 'trace-chat-1')
+        .send({ question: 'How do you score in Asteroids?' });
+
+      expect(res.headers['x-request-id']).toBe('trace-chat-1');
+      expect(querySpy).toHaveBeenCalledWith(
+        expect.objectContaining({ question: expect.any(String) }),
+        'trace-chat-1',
+      );
+    });
+
+    it('generates a request id when the client does not send one', async () => {
+      const res = await request(app)
+        .post('/api/chat')
+        .set('x-api-key', API_KEY)
+        .send({ question: 'What is Pong?' });
+
+      expect(res.headers['x-request-id']).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+      );
+      expect(querySpy).toHaveBeenCalledWith(expect.anything(), res.headers['x-request-id']);
+    });
+
+    it('logs chat_completed with the request id on a cache miss', async () => {
+      const infoSpy = jest.spyOn(logger, 'info').mockImplementation(() => undefined);
+
+      await request(app)
+        .post('/api/chat')
+        .set('x-api-key', API_KEY)
+        .set('x-request-id', 'trace-chat-2')
+        .send({ question: 'How do you score in Asteroids?' });
+
+      expect(infoSpy).toHaveBeenCalledWith(
+        'chat_completed',
+        expect.objectContaining({
+          request_id: 'trace-chat-2',
+          cached: false,
+          upstream_ms: expect.any(Number),
+          sources: 1,
+        }),
+      );
+    });
+
+    it('logs chat_completed with cached: true on a cache hit', async () => {
+      getCacheSpy.mockResolvedValue({
+        answer: 'Cached answer.',
+        sources: [],
+        latency_ms: 42,
+      });
+      const infoSpy = jest.spyOn(logger, 'info').mockImplementation(() => undefined);
+
+      await request(app)
+        .post('/api/chat')
+        .set('x-api-key', API_KEY)
+        .set('x-request-id', 'trace-chat-3')
+        .send({ question: 'How do you score in Asteroids?' });
+
+      expect(infoSpy).toHaveBeenCalledWith(
+        'chat_completed',
+        expect.objectContaining({
+          request_id: 'trace-chat-3',
+          cached: true,
+          latency_ms: 42,
+        }),
+      );
     });
   });
 

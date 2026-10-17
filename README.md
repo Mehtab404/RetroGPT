@@ -11,7 +11,7 @@
 
 - **Accurate retrieval:** Hybrid search (vector + BM25) with cross-encoder re-ranking
 - **Source citations:** Every answer includes references to original documents
-- **Production-ready:** Docker Compose, CI/CD, automated evaluation, structured logging
+- **Production-ready:** Docker Compose, CI/CD, automated evaluation, structured JSON logs with request IDs
 - **Fast responses:** Redis caching for sub-200ms repeated queries
 - **Persistent chat:** MongoDB-backed session history
 - **Secure:** API key authentication with rate limiting
@@ -138,6 +138,28 @@ docker compose down
 # Stop and remove volumes (fresh start)
 docker compose down -v
 ```
+
+### Observability
+
+Both services emit one newline-delimited JSON object per log line with a shared
+shape (`timestamp`, `level`, `service`, `event`, optional `request_id` plus
+context fields), so logs can be piped straight into `jq` or any log shipper:
+
+```json
+{"timestamp":"2026-10-17T12:30:36.561Z","level":"info","service":"api-gateway","event":"http_request","request_id":"demo-24-trace-live","method":"POST","path":"/api/chat","status":502,"duration_ms":1980.42}
+{"timestamp":"2026-10-17T12:30:36.553Z","level":"info","service":"ai-service","logger":"app.request","event":"http_request","request_id":"demo-24-trace-live","method":"POST","path":"/query","status":502,"duration_ms":158.27}
+```
+
+The gateway accepts an `x-request-id` header (sanitized, max 64 chars),
+generates one when absent, echoes it on the response and forwards it to the
+AI service — reusing the same id across retries — so every line belonging to
+one request is correlated across both services. The AI service additionally
+logs per-stage latencies (`embed`, `retrieve` with `hybrid_search_ms` /
+`rerank_ms`, `generate`) in a single `query` event.
+
+Set `LOG_LEVEL` (`debug` | `info` | `warn` | `error`, default `info`) in `.env`
+to control verbosity; `debug` also logs `/health` probes. See
+[ADR 0005](./docs/decisions.md) for the design rationale.
 
 ---
 
@@ -373,7 +395,7 @@ This is a portfolio/learning project. Contributions are welcome!
 - [x] M2: API gateway (auth, caching, sessions)
 - [x] M3: Frontend UI
 - [x] M4: Evaluation suite and quality improvements
-- [ ] M5: Production deployment (AWS + CI/CD)
+- [ ] M5: Production deployment (AWS + CI/CD) — structured logging + request IDs done (#24)
 - [ ] M6: Polish (streaming, load tests, documentation)
 
 See [GitHub Issues](https://github.com/YOUR_USERNAME/retrogpt/issues) for detailed task breakdown.

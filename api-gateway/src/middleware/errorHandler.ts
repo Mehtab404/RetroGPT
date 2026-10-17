@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { ZodError } from 'zod';
+import { logger } from '../utils/logger';
 
 export interface AppError extends Error {
   statusCode?: number;
@@ -8,12 +9,18 @@ export interface AppError extends Error {
 
 export const errorHandler = (
   err: AppError | ZodError,
-  _req: Request,
+  req: Request,
   res: Response,
   _next: NextFunction,
 ) => {
   // Handle Zod validation errors
   if (err instanceof ZodError) {
+    logger.warn('request_failed', {
+      request_id: req.requestId,
+      status: 400,
+      code: 'VALIDATION_ERROR',
+      error: err,
+    });
     return res.status(400).json({
       error: {
         code: 'VALIDATION_ERROR',
@@ -27,6 +34,14 @@ export const errorHandler = (
   const statusCode = err.statusCode || 500;
   const code = err.code || 'INTERNAL_ERROR';
   const message = err.message || 'An unexpected error occurred';
+
+  const level = statusCode >= 500 ? 'error' : 'warn';
+  logger[level]('request_failed', {
+    request_id: req.requestId,
+    status: statusCode,
+    code,
+    error: err,
+  });
 
   return res.status(statusCode).json({
     error: {
