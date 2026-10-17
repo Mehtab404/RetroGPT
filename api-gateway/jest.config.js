@@ -8,6 +8,7 @@ module.exports = {
     'src/**/*.ts',
     '!src/**/*.test.ts',
     '!src/**/*.spec.ts',
+    '!src/index.ts', // server bootstrap — not testable without a real port
   ],
   coverageThreshold: {
     global: {

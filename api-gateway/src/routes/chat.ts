@@ -1,8 +1,9 @@
 /**
  * Chat route — POST /api/chat
  *
- * Validates the incoming request, proxies it to the AI service, and returns
- * a structured response that includes an auto-generated (or echoed) sessionId.
+ * Validates the incoming request, proxies it to the AI service, persists
+ * both the user message and the assistant reply in MongoDB, and returns a
+ * structured response that includes an auto-generated (or echoed) sessionId.
  */
 
 import { randomUUID } from 'crypto';
@@ -11,6 +12,7 @@ import { z } from 'zod';
 import { queryAiService } from '../services/aiClient';
 import { AppError } from '../middleware/errorHandler';
 import { AxiosError } from 'axios';
+import { Session } from '../models/session';
 
 // ---------------------------------------------------------------------------
 // Validation schema
@@ -70,6 +72,9 @@ router.post(
     // 2. Proxy to AI service
     try {
       const aiResponse = await queryAiService({ question });
+
+      // 3. Persist messages to MongoDB (fire-and-wait, non-blocking to response)
+      await persistMessages(resolvedSessionId, question, aiResponse.answer, aiResponse.sources);
 
       res.status(200).json({
         sessionId: resolvedSessionId,
@@ -131,5 +136,45 @@ router.post(
     }
   },
 );
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Upsert the session document by appending the user message and the
+ * assistant reply.  If the session doesn't exist yet, MongoDB creates it.
+ *
+ * Errors are logged but NOT re-thrown so a DB outage does not fail the chat
+ * response to the user.
+ */
+async function persistMessages(
+  sessionId: string,
+  question: string,
+  answer: string,
+  sources: { id: string; title: string; score: number; snippet: string }[],
+): Promise<void> {
+  try {
+    const now = new Date();
+    await Session.findOneAndUpdate(
+      { sessionId },
+      {
+        $push: {
+          messages: {
+            $each: [
+              { role: 'user', content: question, createdAt: now },
+              { role: 'assistant', content: answer, sources, createdAt: now },
+            ],
+          },
+        },
+      },
+      { upsert: true, new: true },
+    );
+  } catch (err) {
+    console.error('[chat] failed to persist session messages:', err);
+  }
+}
+
+export { persistMessages };
 
 export default router;

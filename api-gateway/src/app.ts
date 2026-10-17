@@ -4,6 +4,7 @@ import helmet from 'helmet';
 import { config } from './config';
 import { errorHandler } from './middleware/errorHandler';
 import chatRouter from './routes/chat';
+import sessionsRouter from './routes/sessions';
 
 const app: Application = express();
 
@@ -38,6 +39,7 @@ app.get('/', (_req: Request, res: Response) => {
 
 // API routes
 app.use('/api', chatRouter);
+app.use('/api', sessionsRouter);
 
 // Error handling middleware (must be last)
 app.use(errorHandler);
