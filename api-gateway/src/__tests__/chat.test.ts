@@ -1,14 +1,15 @@
 /**
  * Tests for POST /api/chat
  *
- * The AI service HTTP client is mocked via jest.mock so no real network calls
- * are made during testing.
+ * The AI service HTTP client and Redis cache are mocked so no real network
+ * calls are made during testing.
  */
 
 import request from 'supertest';
 import axios, { AxiosError } from 'axios';
 import app from '../app';
 import * as aiClient from '../services/aiClient';
+import * as cache from '../services/cache';
 
 // Mock Session model so no real MongoDB calls are made in chat tests
 jest.mock('../models/session', () => ({
@@ -16,6 +17,12 @@ jest.mock('../models/session', () => ({
     findOne: jest.fn(),
     findOneAndUpdate: jest.fn().mockResolvedValue(null),
   },
+}));
+
+// Mock cache service so no real Redis calls are made
+jest.mock('../services/cache', () => ({
+  getCachedResponse: jest.fn().mockResolvedValue(null),
+  setCachedResponse: jest.fn().mockResolvedValue(undefined),
 }));
 
 // ---------------------------------------------------------------------------
@@ -69,11 +76,18 @@ function makeNetworkError(code: string): AxiosError {
 
 describe('POST /api/chat', () => {
   let querySpy: jest.SpyInstance;
+  let getCacheSpy: jest.SpyInstance;
+  let setCacheSpy: jest.SpyInstance;
 
   beforeEach(() => {
+    jest.clearAllMocks();
+
     querySpy = jest
       .spyOn(aiClient, 'queryAiService')
       .mockResolvedValue(makeAiResponse());
+
+    getCacheSpy = jest.spyOn(cache, 'getCachedResponse').mockResolvedValue(null);
+    setCacheSpy = jest.spyOn(cache, 'setCachedResponse').mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -171,6 +185,115 @@ describe('POST /api/chat', () => {
         score: expect.any(Number),
         snippet: expect.any(String),
       });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Caching behaviour
+  // -------------------------------------------------------------------------
+
+  describe('caching behaviour', () => {
+    it('returns cached: false on a cache miss', async () => {
+      getCacheSpy.mockResolvedValue(null);
+
+      const res = await request(app)
+        .post('/api/chat')
+        .send({ question: 'How do you score in Asteroids?' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.cached).toBe(false);
+    });
+
+    it('calls getCachedResponse before querying the AI service', async () => {
+      getCacheSpy.mockResolvedValue(null);
+      const question = 'How do you score in Asteroids?';
+
+      await request(app).post('/api/chat').send({ question });
+
+      expect(getCacheSpy).toHaveBeenCalledWith(question);
+      // AI service should still be called on a miss
+      expect(querySpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('calls setCachedResponse with the AI response on a cache miss', async () => {
+      getCacheSpy.mockResolvedValue(null);
+      const aiResp = makeAiResponse();
+      querySpy.mockResolvedValue(aiResp);
+
+      const question = 'How do you score in Asteroids?';
+      await request(app).post('/api/chat').send({ question });
+
+      expect(setCacheSpy).toHaveBeenCalledWith(
+        question,
+        expect.objectContaining({
+          answer: aiResp.answer,
+          sources: aiResp.sources,
+          latency_ms: aiResp.latency_ms,
+        }),
+      );
+    });
+
+    it('returns cached: true on a cache hit', async () => {
+      const cachedPayload = {
+        answer: 'Cached answer about Asteroids.',
+        sources: [
+          {
+            id: 'asteroids_manual_p3_c2',
+            title: 'Asteroids Manual',
+            score: 0.91,
+            snippet: 'Large asteroids: 20 points...',
+          },
+        ],
+        latency_ms: 50,
+      };
+      getCacheSpy.mockResolvedValue(cachedPayload);
+
+      const res = await request(app)
+        .post('/api/chat')
+        .send({ question: 'How do you score in Asteroids?' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.cached).toBe(true);
+      expect(res.body.answer).toBe(cachedPayload.answer);
+      expect(res.body.latency_ms).toBe(cachedPayload.latency_ms);
+    });
+
+    it('does NOT call AI service when cache hit', async () => {
+      const cachedPayload = {
+        answer: 'Cached answer.',
+        sources: [],
+        latency_ms: 10,
+      };
+      getCacheSpy.mockResolvedValue(cachedPayload);
+
+      await request(app)
+        .post('/api/chat')
+        .send({ question: 'How do you score in Asteroids?' });
+
+      expect(querySpy).not.toHaveBeenCalled();
+    });
+
+    it('returns the correct sessionId on a cache hit', async () => {
+      const cachedPayload = {
+        answer: 'Cached answer.',
+        sources: [],
+        latency_ms: 10,
+      };
+      getCacheSpy.mockResolvedValue(cachedPayload);
+
+      const sessionId = '550e8400-e29b-41d4-a716-446655440000';
+      const res = await request(app)
+        .post('/api/chat')
+        .send({ question: 'How do you score in Asteroids?', sessionId });
+
+      expect(res.status).toBe(200);
+      expect(res.body.sessionId).toBe(sessionId);
+    });
+
+    it('does not call getCachedResponse when validation fails', async () => {
+      await request(app).post('/api/chat').send({ question: 'AB' });
+
+      expect(getCacheSpy).not.toHaveBeenCalled();
     });
   });
 

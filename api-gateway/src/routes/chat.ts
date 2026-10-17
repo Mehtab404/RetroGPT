@@ -1,15 +1,22 @@
 /**
  * Chat route — POST /api/chat
  *
- * Validates the incoming request, proxies it to the AI service, persists
- * both the user message and the assistant reply in MongoDB, and returns a
- * structured response that includes an auto-generated (or echoed) sessionId.
+ * Request lifecycle:
+ *  1. Validate incoming body with zod.
+ *  2. Check Redis cache — return immediately on a hit (cached: true).
+ *  3. Forward the question to the AI service.
+ *  4. Store the AI response in Redis for future requests.
+ *  5. Persist both messages to MongoDB (non-blocking; DB errors don't fail
+ *     the response).
+ *  6. Return a structured response that includes an auto-generated (or
+ *     echoed) sessionId and `cached: false`.
  */
 
 import { randomUUID } from 'crypto';
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { queryAiService } from '../services/aiClient';
+import { getCachedResponse, setCachedResponse } from '../services/cache';
 import { AppError } from '../middleware/errorHandler';
 import { AxiosError } from 'axios';
 import { Session } from '../models/session';
@@ -48,7 +55,7 @@ const router = Router();
  *
  * Response:
  *   { "sessionId": "uuid", "answer": "...", "sources": [...],
- *     "latency_ms": 1234, "cached": false }
+ *     "latency_ms": 1234, "cached": true | false }
  */
 router.post(
   '/chat',
@@ -69,19 +76,43 @@ router.post(
     const { question, sessionId } = parseResult.data;
     const resolvedSessionId = sessionId ?? randomUUID();
 
-    // 2. Proxy to AI service
+    // 2. Check Redis cache
+    const cached = await getCachedResponse(question);
+    if (cached !== null) {
+      // Cache hit — persist the exchange and return immediately
+      await persistMessages(resolvedSessionId, question, cached.answer, cached.sources);
+
+      res.status(200).json({
+        sessionId: resolvedSessionId,
+        answer: cached.answer,
+        sources: cached.sources,
+        latency_ms: cached.latency_ms,
+        cached: true,
+      });
+      return;
+    }
+
+    // 3. Cache miss — proxy to AI service
     try {
       const aiResponse = await queryAiService({ question });
 
-      // 3. Persist messages to MongoDB (fire-and-wait, non-blocking to response)
+      // 4. Store in Redis (fire-and-forget; errors are swallowed inside)
+      await setCachedResponse(question, {
+        answer: aiResponse.answer,
+        sources: aiResponse.sources,
+        latency_ms: aiResponse.latency_ms,
+      });
+
+      // 5. Persist messages to MongoDB (non-blocking to response)
       await persistMessages(resolvedSessionId, question, aiResponse.answer, aiResponse.sources);
 
+      // 6. Respond
       res.status(200).json({
         sessionId: resolvedSessionId,
         answer: aiResponse.answer,
         sources: aiResponse.sources,
         latency_ms: aiResponse.latency_ms,
-        cached: aiResponse.cached,
+        cached: false,
       });
     } catch (err) {
       const axiosErr = err as AxiosError;
