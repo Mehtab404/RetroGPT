@@ -1,13 +1,15 @@
 import app from './app';
 import { config } from './config';
 import { connectMongo, disconnectMongo } from './db/mongo';
+import { getRedisClient, disconnectRedis } from './services/cache';
 
 const PORT = config.port;
 
 async function start(): Promise<void> {
-  // Connect to MongoDB before accepting traffic
+  // Connect to MongoDB and Redis before accepting traffic
   if (config.nodeEnv !== 'test') {
     await connectMongo();
+    await getRedisClient();
   }
 
   const server = app.listen(PORT, () => {
@@ -21,6 +23,7 @@ async function start(): Promise<void> {
     console.log(`\n${signal} received — shutting down gracefully`);
     server.close(async () => {
       await disconnectMongo();
+      await disconnectRedis();
       console.log('✓ Server closed');
       process.exit(0);
     });
