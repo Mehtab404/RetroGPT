@@ -27,7 +27,12 @@
 | Answer faithfulness (RAGAS) | ≥ 0.85 | _TBD_ |
 | p95 latency (uncached) | < 4 s | _TBD_ |
 | p95 latency (cached) | < 200 ms | _TBD_ |
-| Test coverage (AI service) | ≥ 70% | _TBD_ |
+| Test coverage (AI service) | ≥ 70% | ≈96% (pytest-cov) |
+
+> The end-to-end metrics require a credentialed evaluation run
+> (`GOOGLE_API_KEY`); until then the offline retrieval sweep and the CI
+> regression guard (Issues #22/#23, see [`eval/README.md`](./eval/README.md))
+> keep retrieval quality measurable and protected.
 
 ---
 
@@ -159,9 +164,11 @@ retrogpt/
 │   └── src/
 ├── eval/                # Evaluation framework
 │   ├── dataset.jsonl    # Test questions + expected results
-│   └── run_eval.py      # Hit rate, MRR, RAGAS metrics
+│   ├── run_eval.py      # End-to-end eval: hit rate, MRR, RAGAS metrics
+│   ├── retrieval_eval.py # Offline retrieval eval: chunking sweeps + CI guard
+│   └── baselines/       # Committed baselines for the CI regression guard
 ├── data/
-│   ├── raw/             # Source documents (gitignored)
+│   ├── raw/             # Source game manuals (committed)
 │   └── README.md        # Data sources & licenses
 ├── nginx/
 │   └── nginx.conf
@@ -190,11 +197,21 @@ docker compose exec frontend npm run test:e2e
 ### Evaluation Suite
 
 ```powershell
-# Run full evaluation
-docker compose exec ai-service python /eval/run_eval.py --output results/baseline.json
+# End-to-end evaluation (needs GOOGLE_API_KEY/OPENAI_API_KEY for answers)
+docker compose exec ai-service python /eval/run_eval.py --label baseline
 
-# Compare two runs
-docker compose exec ai-service python /eval/run_eval.py --compare results/baseline.json results/improved.json
+# Retrieval-only evaluation — no API key needed (writes eval/results/)
+docker compose exec ai-service python /eval/retrieval_eval.py --limit 10
+
+# Chunking sweep (chunk sizes x overlaps, comparison table)
+docker compose exec ai-service python /eval/retrieval_eval.py `
+  --sweep-sizes 400,800,1200 --sweep-overlaps 0,100,120 `
+  --embedder fastembed --no-rerank --label chunking-sweep
+
+# CI regression guard: fail if Hit Rate drops > 5 points vs. baseline
+docker compose exec ai-service python /eval/retrieval_eval.py `
+  --limit 10 --embedder hashing --no-rerank `
+  --baseline /eval/baselines/ci-offline.json
 ```
 
 ---
@@ -224,10 +241,14 @@ RetroGPT is measured against a 70-question labeled dataset (`eval/dataset.jsonl`
 docker compose exec ai-service python /eval/run_eval.py --label baseline
 ```
 
-Every run writes a JSON + Markdown report to `eval/results/`. See
-[`eval/README.md`](./eval/README.md) for the dataset schema, metric
-definitions, flags, and the CI regression guard (`--min-hit-rate`,
-`--baseline`).
+Every run writes a JSON + Markdown report to `eval/results/`. Retrieval-only
+runs (`eval/retrieval_eval.py`) additionally sweep chunking configurations
+([ADR 0004](./docs/decisions.md)) and power the CI regression guard: on PRs
+touching `ai-service/`/`eval/`, the first 10 questions are re-run against a
+throwaway Qdrant with deterministic offline embeddings and fail the build if
+Hit Rate drops more than 5 points below the committed baseline — no API keys
+required. See [`eval/README.md`](./eval/README.md) for the dataset schema,
+metric definitions, flags, and CI details.
 
 ---
 
@@ -351,7 +372,7 @@ This is a portfolio/learning project. Contributions are welcome!
 - [x] M1: RAG core (ingestion, retrieval, generation)
 - [x] M2: API gateway (auth, caching, sessions)
 - [x] M3: Frontend UI
-- [ ] M4: Evaluation suite and quality improvements ⏳ in progress
+- [x] M4: Evaluation suite and quality improvements
 - [ ] M5: Production deployment (AWS + CI/CD)
 - [ ] M6: Polish (streaming, load tests, documentation)
 

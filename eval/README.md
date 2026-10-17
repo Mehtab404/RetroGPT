@@ -9,6 +9,7 @@ Measures RetroGPT's retrieval and answer quality against a labeled dataset.
 | `dataset.jsonl` | 70 labeled questions (Issue #18) |
 | `run_eval.py` | Stdlib-only evaluation harness (Issue #19) |
 | `retrieval_eval.py` | In-process retrieval evaluation: chunking sweeps + CI regression guard (Issues #22/#23) |
+| `baselines/` | Committed baselines for the CI regression guard (Issue #23) |
 | `results/` | Saved runs — `<date>-<label>.json` + `.md` |
 | `requirements-eval.txt` | Optional RAGAS dependencies (`--with-ragas`) |
 | `tests/` | Unit tests for the harness (no services needed) |
@@ -138,11 +139,27 @@ was skipped.
 
 ## CI regression guard (#23)
 
-`.github/workflows/ci.yml` runs `eval/tests` on every PR. When a live stack
-with credentials is available, a small subset can guard quality:
+`.github/workflows/ci.yml` runs `eval/tests` on every PR. On top of that,
+`.github/workflows/eval.yml` guards retrieval quality: on PRs touching
+`ai-service/`, `eval/` or `data/raw/` it runs the first 10 dataset questions
+through the **real retrieval stack** (chunking → BM25 → hybrid RRF,
+re-ranking disabled) against a throwaway Qdrant, using deterministic hashing
+embeddings — no API keys required, so it runs on forks and costs nothing.
+The job fails when Hit Rate drops more than 5 points below the committed
+baseline `eval/baselines/ci-offline.json`.
+
+Reproduce the exact check locally:
 
 ```powershell
-docker compose exec ai-service python /eval/run_eval.py `
-  --limit 10 --label ci --min-hit-rate 0.80 `
-  --baseline /eval/results/baseline.json
+docker compose exec ai-service python /eval/retrieval_eval.py `
+  --corpus /data/raw --dataset /eval/dataset.jsonl --limit 10 `
+  --embedder hashing --no-rerank --label ci-offline `
+  --baseline /eval/baselines/ci-offline.json
 ```
+
+Exit codes: `0` passed · `1` guard failed · `2` fatal. The run's JSON /
+Markdown report is uploaded as the `retrieval-eval-report` CI artifact.
+
+The credentialed end-to-end eval (`run_eval.py` with Gemini/OpenAI) remains
+the source of truth for answer-quality metrics; the offline guard only
+protects retrieval from regressions.

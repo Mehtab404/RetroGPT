@@ -1,0 +1,80 @@
+name: Eval Regression
+
+# Retrieval-quality regression guard (Issue #23).
+#
+# Runs the first 10 dataset questions through the real retrieval stack
+# (chunking → BM25 → hybrid RRF, re-ranking disabled) against a throwaway
+# Qdrant, using deterministic hashing embeddings — no API keys required, so
+# this works for forks and cost-free.  Fails when Hit Rate drops more than
+# 5 points below the committed baseline (eval/baselines/ci-offline.json).
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "ai-service/**"
+      - "eval/**"
+      - "data/raw/**"
+      - ".github/workflows/eval.yml"
+  workflow_dispatch:
+
+jobs:
+  retrieval-eval:
+    name: Retrieval Quality Guard
+    runs-on: ubuntu-latest
+
+    services:
+      qdrant:
+        image: qdrant/qdrant:v1.7.4
+        ports:
+          - 6333:6333
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: ai-service/requirements.txt
+
+      - name: Install ai-service dependencies
+        working-directory: ./ai-service
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Wait for Qdrant
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl -sf http://localhost:6333/readyz > /dev/null; then
+              echo "Qdrant is ready."
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Qdrant did not become ready in time." >&2
+          exit 1
+
+      - name: Run retrieval eval guard
+        run: |
+          python eval/retrieval_eval.py \
+            --corpus data/raw \
+            --dataset eval/dataset.jsonl \
+            --limit 10 \
+            --embedder hashing \
+            --no-rerank \
+            --qdrant-url http://localhost:6333 \
+            --label ci-offline \
+            --baseline eval/baselines/ci-offline.json
+
+      - name: Upload eval report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: retrieval-eval-report
+          path: eval/results/
+          retention-days: 7
+          if-no-files-found: ignore
