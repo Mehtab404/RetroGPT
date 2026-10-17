@@ -348,10 +348,10 @@ This is a portfolio/learning project. Contributions are welcome!
 ## 🎯 Roadmap
 
 - [x] M0: Repository setup and infrastructure services
-- [ ] M1: RAG core (ingestion, retrieval, generation)
-- [ ] M2: API gateway (auth, caching, sessions)
-- [ ] M3: Frontend UI
-- [ ] M4: Evaluation suite and quality improvements
+- [x] M1: RAG core (ingestion, retrieval, generation)
+- [x] M2: API gateway (auth, caching, sessions)
+- [x] M3: Frontend UI
+- [ ] M4: Evaluation suite and quality improvements ⏳ in progress
 - [ ] M5: Production deployment (AWS + CI/CD)
 - [ ] M6: Polish (streaming, load tests, documentation)
 
