@@ -85,9 +85,7 @@ def _build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         metavar="NAME",
-        help=(
-            "Qdrant collection name (default: from QDRANT_COLLECTION env / settings)."
-        ),
+        help=("Qdrant collection name (default: from QDRANT_COLLECTION env / settings)."),
     )
     parser.add_argument(
         "--embedding-provider",
@@ -120,7 +118,8 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--verbose", "-v",
+        "--verbose",
+        "-v",
         action="store_true",
         help="Enable DEBUG-level logging.",
     )
@@ -135,15 +134,14 @@ def _build_parser() -> argparse.ArgumentParser:
 async def _dry_run(source: Path, args: argparse.Namespace) -> int:
     """Simulate ingestion without writing to Qdrant.
 
-    Loads, chunks, and embeds documents, printing a summary.
+    Loads and chunks documents, printing a summary.
 
     Returns:
         Exit code (0 = success, 1 = partial errors).
     """
     from app.ingestion.chunker import RecursiveCharacterTextSplitter
-    from app.ingestion.embeddings import get_embedding_provider
     from app.ingestion.loaders import get_loader_for
-    from app.ingestion.pipeline import IngestionPipeline, _SUPPORTED_EXTENSIONS
+    from app.ingestion.pipeline import _SUPPORTED_EXTENSIONS
 
     # Build components with CLI overrides.
     chunk_kwargs: dict[str, int] = {}
@@ -157,11 +155,7 @@ async def _dry_run(source: Path, args: argparse.Namespace) -> int:
     if source.is_file():
         files = [source] if source.suffix.lower() in _SUPPORTED_EXTENSIONS else []
     else:
-        files = sorted(
-            f
-            for ext in _SUPPORTED_EXTENSIONS
-            for f in source.rglob(f"*{ext}")
-        )
+        files = sorted(f for ext in _SUPPORTED_EXTENSIONS for f in source.rglob(f"*{ext}"))
 
     if not files:
         logger.warning("No supported files found under '%s'.", source)
@@ -169,8 +163,7 @@ async def _dry_run(source: Path, args: argparse.Namespace) -> int:
 
     total_docs = 0
     total_chunks = 0
-    errors: dict[str, str] = []  # type: ignore[assignment]
-    errors = {}
+    errors: dict[str, str] = {}
 
     for file_path in files:
         try:
@@ -179,10 +172,7 @@ async def _dry_run(source: Path, args: argparse.Namespace) -> int:
             chunks = splitter.split_documents(docs)
             total_docs += len(docs)
             total_chunks += len(chunks)
-            print(
-                f"  [DRY RUN] {file_path.name}: "
-                f"{len(docs)} doc(s), {len(chunks)} chunk(s)"
-            )
+            print(f"  [DRY RUN] {file_path.name}: " f"{len(docs)} doc(s), {len(chunks)} chunk(s)")
         except Exception as exc:
             logger.error("Error processing '%s': %s", file_path, exc)
             errors[str(file_path)] = str(exc)
@@ -223,11 +213,7 @@ async def _run_ingestion(source: Path, args: argparse.Namespace) -> int:
         store_kwargs["collection"] = args.collection
     store = QdrantVectorStore(**store_kwargs)  # type: ignore[arg-type]
 
-    embed_kwargs: dict[str, str] = {}
-    if args.embedding_provider:
-        provider_name: str = args.embedding_provider
-    else:
-        provider_name = None  # type: ignore[assignment]
+    provider_name: str | None = args.embedding_provider
     embedder = get_embedding_provider(provider_name)
 
     chunk_kwargs: dict[str, int] = {}

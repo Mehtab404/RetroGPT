@@ -11,8 +11,6 @@ All Qdrant calls are mocked so no real Qdrant instance is required.
 
 from __future__ import annotations
 
-import asyncio
-import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -22,7 +20,6 @@ from app.ingestion.chunker import Chunk, RecursiveCharacterTextSplitter
 from app.ingestion.loaders import Document
 from app.ingestion.pipeline import IngestionPipeline, IngestionResult
 from app.retrieval.vector_store import QdrantVectorStore, SearchResult, VectorStoreError
-
 
 # ===========================================================================
 # Helpers / Fixtures
@@ -59,9 +56,7 @@ def _make_mock_client(
     mock_col = MagicMock()
     mock_col.name = "retro_games" if "retro_games" in col_names else "__none__"
     collections_response = MagicMock()
-    collections_response.collections = [
-        _named_collection(n) for n in col_names
-    ]
+    collections_response.collections = [_named_collection(n) for n in col_names]
     client.get_collections.return_value = collections_response
 
     # create_collection
@@ -117,7 +112,7 @@ class TestVectorStoreError:
 
     def test_can_wrap_cause(self):
         cause = ValueError("root cause")
-        err = VectorStoreError("wrapper") 
+        err = VectorStoreError("wrapper")
         try:
             raise err from cause
         except VectorStoreError as e:
@@ -180,6 +175,7 @@ class TestEnsureCollection:
     @pytest.mark.asyncio
     async def test_vector_params_use_cosine_distance(self):
         from qdrant_client.http import models as m
+
         client = _make_mock_client(collections=[])
         store = QdrantVectorStore(client=client, vector_size=768)
         await store.ensure_collection()
@@ -367,11 +363,10 @@ class TestSearch:
     @pytest.mark.asyncio
     async def test_filter_forwarded_to_client(self):
         from qdrant_client.http import models as m
+
         client = _make_mock_client(search_hits=[])
         store = QdrantVectorStore(client=client)
-        f = m.Filter(
-            must=[m.FieldCondition(key="game", match=m.MatchValue(value="pong"))]
-        )
+        f = m.Filter(must=[m.FieldCondition(key="game", match=m.MatchValue(value="pong"))])
         await store.search([0.1] * 768, filter=f)
         call_kwargs = client.search.call_args[1]
         assert call_kwargs["query_filter"] is f
@@ -413,6 +408,7 @@ class TestCount:
     @pytest.mark.asyncio
     async def test_returns_zero_for_missing_collection(self):
         from qdrant_client.http.exceptions import UnexpectedResponse
+
         client = MagicMock()
         resp = MagicMock()
         resp.status_code = 404
@@ -477,7 +473,7 @@ class TestIngestDocuments:
         mock_store.upsert = AsyncMock(return_value=2)
         doc = Document(
             content="## Asteroids\n\nShooting rocks for fun and profit.\n\n"
-                    "Large rock: 20 pts. Small rock: 100 pts.",
+            "Large rock: 20 pts. Small rock: 100 pts.",
             metadata={"source": "asteroids_manual.md", "game": "asteroids"},
         )
         pipeline = IngestionPipeline(
@@ -613,9 +609,11 @@ class TestPipelineRunDirectory:
         mock_store = MagicMock()
         mock_store.ensure_collection = AsyncMock()
         mock_store.upsert = AsyncMock(side_effect=lambda **kwargs: len(kwargs.get("points", [])))
+
         # Patch upsert to return correct count
         async def fake_upsert(chunks, vectors):
             return len(chunks)
+
         mock_store.upsert = AsyncMock(side_effect=fake_upsert)
         pipeline = IngestionPipeline(
             vector_store=mock_store,
@@ -679,6 +677,7 @@ class TestPipelineRunSingleFile:
 
         async def fake_upsert(chunks, vectors):
             return len(chunks)
+
         mock_store.upsert = AsyncMock(side_effect=fake_upsert)
 
         pipeline = IngestionPipeline(
@@ -716,6 +715,7 @@ class TestPipelineEmbeddingErrors:
     @pytest.mark.asyncio
     async def test_embedding_error_captured_per_file(self, tmp_path: Path):
         from app.ingestion.embeddings import EmbeddingError
+
         md = tmp_path / "fail.md"
         md.write_text("# Fail\n\nThis will fail on embedding.", encoding="utf-8")
 
@@ -736,6 +736,7 @@ class TestPipelineEmbeddingErrors:
     @pytest.mark.asyncio
     async def test_upsert_error_captured_per_file(self, tmp_path: Path):
         from app.retrieval.vector_store import VectorStoreError
+
         md = tmp_path / "doc.md"
         md.write_text("# Doc\n\nContent here.", encoding="utf-8")
 
@@ -781,54 +782,63 @@ class TestIngestionResult:
 class TestCLIArgumentParsing:
     def test_source_required(self):
         from scripts.ingest import _build_parser
+
         parser = _build_parser()
         with pytest.raises(SystemExit):
             parser.parse_args([])
 
     def test_source_parsed(self, tmp_path: Path):
         from scripts.ingest import _build_parser
+
         parser = _build_parser()
         args = parser.parse_args([str(tmp_path)])
         assert args.source == tmp_path
 
     def test_dry_run_flag(self, tmp_path: Path):
         from scripts.ingest import _build_parser
+
         parser = _build_parser()
         args = parser.parse_args([str(tmp_path), "--dry-run"])
         assert args.dry_run is True
 
     def test_collection_option(self, tmp_path: Path):
         from scripts.ingest import _build_parser
+
         parser = _build_parser()
         args = parser.parse_args([str(tmp_path), "--collection", "my_col"])
         assert args.collection == "my_col"
 
     def test_qdrant_url_option(self, tmp_path: Path):
         from scripts.ingest import _build_parser
+
         parser = _build_parser()
         args = parser.parse_args([str(tmp_path), "--qdrant-url", "http://myhost:6333"])
         assert args.qdrant_url == "http://myhost:6333"
 
     def test_embedding_provider_option(self, tmp_path: Path):
         from scripts.ingest import _build_parser
+
         parser = _build_parser()
         args = parser.parse_args([str(tmp_path), "--embedding-provider", "openai"])
         assert args.embedding_provider == "openai"
 
     def test_chunk_size_option(self, tmp_path: Path):
         from scripts.ingest import _build_parser
+
         parser = _build_parser()
         args = parser.parse_args([str(tmp_path), "--chunk-size", "500"])
         assert args.chunk_size == 500
 
     def test_verbose_flag(self, tmp_path: Path):
         from scripts.ingest import _build_parser
+
         parser = _build_parser()
         args = parser.parse_args([str(tmp_path), "--verbose"])
         assert args.verbose is True
 
     def test_invalid_embedding_provider_rejected(self, tmp_path: Path):
         from scripts.ingest import _build_parser
+
         parser = _build_parser()
         with pytest.raises(SystemExit):
             parser.parse_args([str(tmp_path), "--embedding-provider", "anthropic"])
@@ -842,25 +852,27 @@ class TestCLIArgumentParsing:
 class TestCLIMain:
     def test_main_returns_2_for_missing_source(self, tmp_path: Path):
         from scripts.ingest import main
+
         exit_code = main([str(tmp_path / "nonexistent_path")])
         assert exit_code == 2
 
     def test_main_dry_run_returns_0_on_empty_dir(self, tmp_path: Path):
         from scripts.ingest import main
+
         exit_code = main([str(tmp_path), "--dry-run"])
         assert exit_code == 0
 
     def test_main_dry_run_returns_0_with_md_files(self, tmp_path: Path):
-        (tmp_path / "doc.md").write_text(
-            "# Test\n\nSome content here.", encoding="utf-8"
-        )
+        (tmp_path / "doc.md").write_text("# Test\n\nSome content here.", encoding="utf-8")
         from scripts.ingest import main
+
         exit_code = main([str(tmp_path), "--dry-run"])
         assert exit_code == 0
 
     def test_main_dry_run_with_chunk_size_override(self, tmp_path: Path):
         (tmp_path / "doc.md").write_text("# Doc\n\nContent.", encoding="utf-8")
         from scripts.ingest import main
+
         exit_code = main([str(tmp_path), "--dry-run", "--chunk-size", "400"])
         assert exit_code == 0
 
@@ -871,9 +883,17 @@ class TestCLIMain:
             encoding="utf-8",
         )
         from scripts.ingest import main
+
         with (
-            patch("app.retrieval.vector_store.QdrantVectorStore.ensure_collection", new_callable=AsyncMock),
-            patch("app.retrieval.vector_store.QdrantVectorStore.upsert", new_callable=AsyncMock, return_value=2),
+            patch(
+                "app.retrieval.vector_store.QdrantVectorStore.ensure_collection",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "app.retrieval.vector_store.QdrantVectorStore.upsert",
+                new_callable=AsyncMock,
+                return_value=2,
+            ),
             patch("app.ingestion.embeddings.get_embedding_provider") as mock_factory,
         ):
             mock_embedder = MagicMock()

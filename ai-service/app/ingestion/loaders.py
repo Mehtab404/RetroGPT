@@ -6,11 +6,9 @@ returns a list of ``Document`` objects ready for downstream chunking.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, runtime_checkable
-
 
 # ---------------------------------------------------------------------------
 # Data model
@@ -193,8 +191,7 @@ class TextLoader:
 
         if path.suffix.lower() not in self.SUPPORTED_EXTENSIONS:
             raise ValueError(
-                f"TextLoader only handles {self.SUPPORTED_EXTENSIONS}; "
-                f"got '{path.suffix}'"
+                f"TextLoader only handles {self.SUPPORTED_EXTENSIONS}; " f"got '{path.suffix}'"
             )
         if not path.exists():
             raise FileNotFoundError(f"File not found: {path}")

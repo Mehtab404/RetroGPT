@@ -31,7 +31,7 @@ import asyncio
 import logging
 import random
 from abc import ABC, abstractmethod
-from typing import Sequence
+from collections.abc import Sequence
 
 import httpx
 
@@ -270,9 +270,7 @@ class GeminiEmbedding(EmbeddingProvider):
         Raises:
             EmbeddingError: On API failure after retries.
         """
-        return await self._embed_batched(
-            list(texts), task_type="RETRIEVAL_DOCUMENT"
-        )
+        return await self._embed_batched(list(texts), task_type="RETRIEVAL_DOCUMENT")
 
     async def embed_query(self, text: str) -> list[float]:
         """Embed a single query string.
@@ -293,17 +291,13 @@ class GeminiEmbedding(EmbeddingProvider):
     # Internal helpers
     # ------------------------------------------------------------------
 
-    async def _embed_batched(
-        self, texts: list[str], task_type: str
-    ) -> list[list[float]]:
+    async def _embed_batched(self, texts: list[str], task_type: str) -> list[list[float]]:
         """Send *texts* in batches and collect all embedding vectors."""
         all_vectors: list[list[float]] = []
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             for i in range(0, len(texts), self.batch_size):
                 batch = texts[i : i + self.batch_size]
-                vectors = await self._with_retry(
-                    self._call_batch_api, client, batch, task_type
-                )
+                vectors = await self._with_retry(self._call_batch_api, client, batch, task_type)
                 all_vectors.extend(vectors)  # type: ignore[arg-type]
         return all_vectors
 
@@ -550,6 +544,5 @@ def get_embedding_provider(
     if resolved == "openai":
         return OpenAIEmbedding(**kwargs)  # type: ignore[arg-type]
     raise ValueError(
-        f"Unknown embedding provider '{resolved}'. "
-        "Supported values: 'gemini', 'openai'."
+        f"Unknown embedding provider '{resolved}'. " "Supported values: 'gemini', 'openai'."
     )
