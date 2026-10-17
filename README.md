@@ -2,8 +2,8 @@
 
 > A production-grade Retrieval-Augmented Generation (RAG) chatbot that answers questions about classic video games (Pong, Asteroids, Centipede, Missile Command, Breakout, etc.) with verifiable citations from game manuals, wikis, and FAQs.
 
-[![CI](https://github.com/YOUR_USERNAME/retrogpt/actions/workflows/ci.yml/badge.svg)](https://github.com/YOUR_USERNAME/retrogpt/actions/workflows/ci.yml)
-[![Deploy](https://github.com/YOUR_USERNAME/retrogpt/actions/workflows/deploy.yml/badge.svg)](https://github.com/YOUR_USERNAME/retrogpt/actions/workflows/deploy.yml)
+[![CI](https://github.com/Mehtab404/RetroGPT/actions/workflows/ci.yml/badge.svg)](https://github.com/Mehtab404/RetroGPT/actions/workflows/ci.yml)
+[![Deploy](https://github.com/Mehtab404/RetroGPT/actions/workflows/deploy.yml/badge.svg)](https://github.com/Mehtab404/RetroGPT/actions/workflows/deploy.yml)
 
 ---
 
@@ -90,8 +90,8 @@
 
 ```powershell
 # Clone the repository
-git clone https://github.com/YOUR_USERNAME/retrogpt.git
-cd retrogpt
+git clone https://github.com/Mehtab404/RetroGPT.git
+cd RetroGPT
 
 # Configure environment variables
 copy .env.example .env
@@ -489,7 +489,7 @@ This is a portfolio/learning project. Contributions are welcome!
 - [ ] M5: Production deployment (AWS + CI/CD) — structured logging, production compose and the CD workflow (`deploy.yml`) done; public URL pending AWS credentials
 - [ ] M6: Polish (load tests, documentation) — streaming done (#25)
 
-See [GitHub Issues](https://github.com/YOUR_USERNAME/retrogpt/issues) for detailed task breakdown.
+See [GitHub Issues](https://github.com/Mehtab404/RetroGPT/issues) for detailed task breakdown.
 
 ---
 
