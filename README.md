@@ -195,10 +195,13 @@ retrogpt/
 │   ├── raw/             # Source game manuals (committed)
 │   └── README.md        # Data sources & licenses
 ├── nginx/
-│   └── nginx.conf
+│   ├── nginx.conf       # Dev reverse proxy
+│   └── prod/            # Production edge templates (HTTP/HTTPS)
+├── deploy/              # ECR build-push, remote deploy, Let's Encrypt scripts
 ├── .github/
 │   └── workflows/       # CI/CD pipelines
-└── docker-compose.yml
+├── docker-compose.yml
+└── docker-compose.prod.yml   # Production stack (ECR images, secrets via env)
 ```
 
 ---
@@ -280,25 +283,54 @@ metric definitions, flags, and CI details.
 
 ### Production Deployment (AWS)
 
-```powershell
-# Build and push images to AWS ECR
-aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin <account>.dkr.ecr.us-east-1.amazonaws.com
+A complete single-host production setup lives in
+[`docker-compose.prod.yml`](./docker-compose.prod.yml) (images from ECR,
+password-protected Redis/MongoDB, size-capped container logs, only Nginx
+exposed) with helper scripts in [`deploy/`](./deploy):
 
-docker compose -f docker-compose.prod.yml build
-docker compose -f docker-compose.prod.yml push
+```bash
+# 1. Build and push images to AWS ECR (tags: git SHA + latest)
+API_KEY=<public-demo-key> \
+ECR_REGISTRY=<account>.dkr.ecr.<region>.amazonaws.com \
+AWS_REGION=<region> \
+  ./deploy/build-push.sh
 
-# Deploy to EC2/ECS (automated via GitHub Actions)
-# See .github/workflows/deploy.yml
+# 2. On the EC2 host (repo checkout with .env.production + ./data):
+IMAGE_TAG=<sha> ./deploy/remote-deploy.sh   # pull, apply, smoke-test /api/health
+
+# 3. Seed the vector database (once)
+docker compose --env-file .env.production -f docker-compose.prod.yml \
+  exec ai-service python -m scripts.ingest /data/raw
+
+# 4. Optional: HTTPS via Let's Encrypt (requires a domain)
+DOMAIN=demo.example.com EMAIL=you@example.com ./deploy/init-letsencrypt.sh
 ```
+
+Local dry run of the exact same stack (no AWS account needed):
+
+```bash
+cp .env.production.example .env.production
+docker compose --env-file .env.production -f docker-compose.prod.yml up -d --build
+curl http://localhost/api/health
+```
+
+See [`docs/deployment.md`](./docs/deployment.md) for the full AWS walkthrough
+(ECR, security group, SSM secrets, ingestion, renewals, rollback).
+
+> **Status:** the production stack, scripts and docs are complete and verified
+> locally; the public demo URL and the CD pipeline (#27) are **pending an AWS
+> account + credentials + domain**.
 
 ### Environment Variables (Production)
 
-Store secrets in AWS Systems Manager Parameter Store or Secrets Manager. Never commit `.env` files.
+Store secrets in AWS Systems Manager Parameter Store or Secrets Manager. Never commit `.env` files. Start from [`.env.production.example`](./.env.production.example).
 
 Required variables:
-- `GOOGLE_API_KEY` or `OPENAI_API_KEY`
-- `API_KEY` (gateway authentication)
-- `MONGO_URL`, `REDIS_URL`, `QDRANT_URL`
+- `GOOGLE_API_KEY` (embeddings + default LLM)
+- `API_KEY` (gateway authentication; also baked into the frontend bundle at build time)
+- `DOMAIN`, `ECR_REGISTRY`
+- `REDIS_PASSWORD`, `MONGO_USER`, `MONGO_PASSWORD`
+- optional: `OPENAI_API_KEY`, `PUBLIC_ORIGIN`, `AI_WORKERS`, tuning vars from the example file
 
 ---
 
@@ -431,6 +463,7 @@ This is a portfolio/learning project. Contributions are welcome!
 
 - [`RetroGPT-PROJECT.md`](./RetroGPT-PROJECT.md) — Complete project specification
 - [`docs/decisions.md`](./docs/decisions.md) — Architecture decision records
+- [`docs/deployment.md`](./docs/deployment.md) — AWS deployment guide (EC2 + ECR + HTTPS)
 - [`data/README.md`](./data/README.md) — Data sources and licenses
 - [AI Service API docs](http://localhost:8000/docs) — Swagger/OpenAPI (when running)
 
@@ -443,7 +476,7 @@ This is a portfolio/learning project. Contributions are welcome!
 - [x] M2: API gateway (auth, caching, sessions)
 - [x] M3: Frontend UI
 - [x] M4: Evaluation suite and quality improvements
-- [ ] M5: Production deployment (AWS + CI/CD) — structured logging + request IDs done (#24)
+- [ ] M5: Production deployment (AWS + CI/CD) — structured logging (#24) and production compose (#26) done; CD pipeline (#27) + public URL pending AWS credentials
 - [ ] M6: Polish (load tests, documentation) — streaming done (#25)
 
 See [GitHub Issues](https://github.com/YOUR_USERNAME/retrogpt/issues) for detailed task breakdown.

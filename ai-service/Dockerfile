@@ -29,5 +29,19 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# Run FastAPI with uvicorn
+# ---------------------------------------------------------------------------
+# Development stage — uvicorn with hot reload (dev compose target).
+# ---------------------------------------------------------------------------
+FROM base AS development
+
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+# ---------------------------------------------------------------------------
+# Production stage — no reload; worker count override with AI_WORKERS.
+# Runs behind the edge Nginx, hence --proxy-headers.
+# ---------------------------------------------------------------------------
+FROM base AS production
+
+CMD uvicorn app.main:app --host 0.0.0.0 --port 8000 \
+    --workers ${AI_WORKERS:-2} \
+    --proxy-headers --forwarded-allow-ips '*'

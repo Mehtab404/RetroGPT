@@ -2,6 +2,7 @@
 .env
 .env.local
 .env.*.local
+.env.production
 
 # Python
 __pycache__/
@@ -58,6 +59,10 @@ data/fastembed_cache/
 qdrant_data/
 redis_data/
 mongo_data/
+
+# Let's Encrypt certificates + ACME webroot (deploy/init-letsencrypt.sh)
+deploy/certbot/conf/
+deploy/certbot/www/
 
 # Operating System & IDE
 .DS_Store

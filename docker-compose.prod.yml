@@ -1,0 +1,222 @@
+# ---------------------------------------------------------------------------
+# RetroGPT production stack (Issue #26) — single-host deployment (AWS EC2).
+#
+#   cp .env.production.example .env.production   # fill in secrets
+#   docker compose --env-file .env.production -f docker-compose.prod.yml up -d
+#
+# Differences from the development stack (docker-compose.yml):
+#   - application images are tagged `${ECR_REGISTRY}/retrogpt-<service>:${IMAGE_TAG}`
+#     and normally pulled from ECR; `build` sections remain so the same file
+#     can build them locally / in CI (see deploy/build-push.sh);
+#   - no source bind mounts and no dev servers — production image targets only;
+#   - Redis and MongoDB require passwords (from the host environment / SSM);
+#   - only the edge Nginx is exposed (80/443); every other port stays internal;
+#   - container logs are size-capped.
+# ---------------------------------------------------------------------------
+
+name: retrogpt-prod
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: '10m'
+    max-file: '3'
+
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.7.4
+    container_name: retrogpt-qdrant
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+    healthcheck:
+      # qdrant's image has no curl/wget; probe the HTTP port with bash /dev/tcp.
+      test: ['CMD-SHELL', "bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/6333'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging: *default-logging
+    restart: unless-stopped
+    networks:
+      - retrogpt-network
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: retrogpt-redis
+    volumes:
+      - redis_data:/data
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+    healthcheck:
+      test: ['CMD-SHELL', 'redis-cli -a "$$REDIS_PASSWORD" ping | grep PONG']
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    logging: *default-logging
+    restart: unless-stopped
+    networks:
+      - retrogpt-network
+
+  mongo:
+    image: mongo:7.0
+    container_name: retrogpt-mongo
+    volumes:
+      - mongo_data:/data/db
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_USER:-retrogpt}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_PASSWORD:?MONGO_PASSWORD is required}
+      - MONGO_INITDB_DATABASE=retrogpt
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'mongosh --quiet -u "$$MONGO_INITDB_ROOT_USERNAME" -p "$$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --eval "db.adminCommand(''ping'')" >/dev/null',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    logging: *default-logging
+    restart: unless-stopped
+    networks:
+      - retrogpt-network
+
+  ai-service:
+    image: ${ECR_REGISTRY:-retrogpt-local}/retrogpt-ai-service:${IMAGE_TAG:-latest}
+    container_name: retrogpt-ai-service
+    build:
+      context: ./ai-service
+      dockerfile: Dockerfile
+      target: production
+    volumes:
+      # Raw game documents + derived artifacts (BM25 stats, rerank cache).
+      - ./data:/data
+    environment:
+      - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
+      - LLM_MODEL=${LLM_MODEL:-gemini-1.5-flash}
+      - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-gemini}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-004}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - QDRANT_URL=http://qdrant:6333
+      - QDRANT_COLLECTION=${QDRANT_COLLECTION:-retro_games}
+      - CHUNK_SIZE=${CHUNK_SIZE:-800}
+      - CHUNK_OVERLAP=${CHUNK_OVERLAP:-120}
+      - RETRIEVAL_TOP_K=${RETRIEVAL_TOP_K:-20}
+      - RERANK_TOP_N=${RERANK_TOP_N:-5}
+      - HYBRID_SEARCH_ENABLED=${HYBRID_SEARCH_ENABLED:-true}
+      - HYBRID_PREFETCH_K=${HYBRID_PREFETCH_K:-20}
+      - BM25_STATS_PATH=${BM25_STATS_PATH:-/data/bm25_stats.json}
+      - RERANK_ENABLED=${RERANK_ENABLED:-true}
+      - RERANK_MODEL=${RERANK_MODEL:-Xenova/ms-marco-MiniLM-L-6-v2}
+      - RERANK_CACHE_DIR=${RERANK_CACHE_DIR:-/data/fastembed_cache}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - AI_WORKERS=${AI_WORKERS:-2}
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    logging: *default-logging
+    restart: unless-stopped
+    networks:
+      - retrogpt-network
+
+  api-gateway:
+    image: ${ECR_REGISTRY:-retrogpt-local}/retrogpt-api-gateway:${IMAGE_TAG:-latest}
+    container_name: retrogpt-api-gateway
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+      target: production
+    environment:
+      - NODE_ENV=production
+      - PORT=4000
+      - CORS_ORIGIN=${PUBLIC_ORIGIN:-*}
+      - AI_SERVICE_URL=http://ai-service:8000
+      - API_KEY=${API_KEY:?API_KEY is required}
+      # Use URL-safe passwords (they are embedded in the connection strings).
+      - REDIS_URL=redis://:${REDIS_PASSWORD:?REDIS_PASSWORD is required}@redis:6379
+      - MONGO_URL=mongodb://${MONGO_USER:-retrogpt}:${MONGO_PASSWORD:?MONGO_PASSWORD is required}@mongo:27017/retrogpt?authSource=admin
+      - CACHE_TTL_SECONDS=${CACHE_TTL_SECONDS:-86400}
+      - RATE_LIMIT_PER_MIN=${RATE_LIMIT_PER_MIN:-30}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      ai-service:
+        condition: service_healthy
+    logging: *default-logging
+    restart: unless-stopped
+    networks:
+      - retrogpt-network
+
+  frontend:
+    image: ${ECR_REGISTRY:-retrogpt-local}/retrogpt-frontend:${IMAGE_TAG:-latest}
+    container_name: retrogpt-frontend
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: production
+      args:
+        # Baked into the static bundle (public demo key by design).
+        VITE_API_KEY: ${API_KEY:?API_KEY is required}
+    logging: *default-logging
+    restart: unless-stopped
+    networks:
+      - retrogpt-network
+
+  # Edge proxy — the only service with host ports. Serves the frontend and
+  # reverse-proxies /api/*; the SSE location disables buffering.
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: retrogpt-nginx
+    ports:
+      - '80:80'
+      - '443:443'
+    environment:
+      # Used by the nginx image entrypoint (envsubst) in the templates below.
+      - DOMAIN=${DOMAIN:?DOMAIN is required (e.g. demo.example.com or localhost)}
+    volumes:
+      # HTTP-only by default. For HTTPS use nginx/prod/https.conf.template
+      # after running deploy/init-letsencrypt.sh (see docs/deployment.md).
+      - ${NGINX_CONF_FILE:-./nginx/prod/http.conf.template}:/etc/nginx/templates/default.conf.template:ro
+      - ./deploy/certbot/conf:/etc/letsencrypt
+      - ./deploy/certbot/www:/var/www/certbot
+    depends_on:
+      - frontend
+      - api-gateway
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q --no-check-certificate -O /dev/null http://localhost/ || exit 1']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging: *default-logging
+    restart: unless-stopped
+    networks:
+      - retrogpt-network
+
+# Named volumes for data persistence (prefixed to keep the dev stack's
+# volumes untouched when both stacks run on the same host).
+volumes:
+  qdrant_data:
+    name: retrogpt_prod_qdrant_data
+  redis_data:
+    name: retrogpt_prod_redis_data
+  mongo_data:
+    name: retrogpt_prod_mongo_data
+
+networks:
+  retrogpt-network:
+    name: retrogpt-prod-network
+    driver: bridge

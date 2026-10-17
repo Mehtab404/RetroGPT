@@ -65,6 +65,7 @@ services:
     build:
       context: ./ai-service
       dockerfile: Dockerfile
+      target: development
     container_name: retrogpt-ai-service
     ports:
       - "8000:8000"
