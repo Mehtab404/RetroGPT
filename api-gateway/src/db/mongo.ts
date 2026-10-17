@@ -7,6 +7,7 @@
 
 import mongoose from 'mongoose';
 import { config } from '../config';
+import { logger } from '../utils/logger';
 
 // ---------------------------------------------------------------------------
 // Connection state helpers
@@ -37,14 +38,14 @@ export async function connectMongo(uri: string = config.mongoUrl): Promise<void>
   });
 
   mongoose.connection.on('error', (err) => {
-    console.error('[MongoDB] connection error:', err);
+    logger.error('mongo_connection_error', { error: err });
   });
 
   mongoose.connection.once('disconnected', () => {
-    console.log('[MongoDB] disconnected');
+    logger.info('mongo_disconnected');
   });
 
-  console.log('[MongoDB] connected to', mongoose.connection.host);
+  logger.info('mongo_connected', { host: mongoose.connection.host });
 }
 
 // ---------------------------------------------------------------------------
@@ -58,7 +59,7 @@ export async function connectMongo(uri: string = config.mongoUrl): Promise<void>
 export async function disconnectMongo(): Promise<void> {
   if (!isConnected()) return;
   await mongoose.connection.close();
-  console.log('[MongoDB] connection closed');
+  logger.info('mongo_connection_closed');
 }
 
 // ---------------------------------------------------------------------------

@@ -274,6 +274,43 @@ class TestRetrieve:
         assert fake_reranker.rerank.call_args[1]["top_n"] == 3
 
     @pytest.mark.asyncio
+    async def test_timings_records_both_stages(self):
+        candidates = [_make_result(c) for c in "abc"]
+        fake_reranker = MagicMock()
+        fake_reranker.rerank = AsyncMock(return_value=candidates)
+        store = MagicMock()
+        timings: dict[str, float] = {}
+        with (
+            patch(
+                "app.retrieval.rerank.hybrid_search",
+                AsyncMock(return_value=candidates),
+            ),
+            patch("app.retrieval.rerank.get_reranker", return_value=fake_reranker),
+        ):
+            await retrieve(store, "q", [0.1], top_k=3, timings=timings)
+
+        assert set(timings) == {"hybrid_search_ms", "rerank_ms"}
+        assert timings["hybrid_search_ms"] >= 0.0
+        assert timings["rerank_ms"] >= 0.0
+
+    @pytest.mark.asyncio
+    async def test_timings_rerank_zero_without_reranker(self):
+        candidates = [_make_result(c) for c in "abc"]
+        store = MagicMock()
+        timings: dict[str, float] = {}
+        with (
+            patch(
+                "app.retrieval.rerank.hybrid_search",
+                AsyncMock(return_value=candidates),
+            ),
+            patch("app.retrieval.rerank.get_reranker", return_value=None),
+        ):
+            await retrieve(store, "q", [0.1], top_k=3, timings=timings)
+
+        assert timings["rerank_ms"] == 0.0
+        assert timings["hybrid_search_ms"] >= 0.0
+
+    @pytest.mark.asyncio
     async def test_without_reranker_returns_hybrid_top_k(self):
         candidates = [_make_result(c) for c in "abcde"]
         store = MagicMock()

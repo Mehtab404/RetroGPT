@@ -119,6 +119,64 @@ describe('aiClient.queryAiService', () => {
   });
 
   // -------------------------------------------------------------------------
+  // Request-id propagation (Issue #24)
+  // -------------------------------------------------------------------------
+
+  it('forwards the request id as x-request-id when provided', async () => {
+    const mockInstance = makeMockInstance([{ resolve: makeAiResponse() }]);
+    setAxiosInstance(mockInstance);
+
+    await queryAiService({ question: 'How to fire?' }, 'trace-ai-1');
+
+    expect(mockInstance.post).toHaveBeenCalledWith(
+      '/query',
+      expect.objectContaining({ question: 'How to fire?' }),
+      { headers: { 'x-request-id': 'trace-ai-1' } },
+    );
+  });
+
+  it('omits the request-id header when no trace id is given', async () => {
+    const mockInstance = makeMockInstance([{ resolve: makeAiResponse() }]);
+    setAxiosInstance(mockInstance);
+
+    await queryAiService({ question: 'How to fire?' });
+
+    expect(mockInstance.post).toHaveBeenCalledWith(
+      '/query',
+      expect.objectContaining({ question: 'How to fire?' }),
+    );
+  });
+
+  it('reuses the same request id across retries', async () => {
+    const mockInstance = makeMockInstance([
+      { reject: makeHttpError(500) },
+      { resolve: makeAiResponse() },
+    ]);
+    setAxiosInstance(mockInstance);
+
+    jest.spyOn(global, 'setTimeout').mockImplementation((fn) => {
+      (fn as () => void)();
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    });
+
+    await queryAiService({ question: 'retry me' }, 'trace-retry-1');
+
+    const expectedConfig = { headers: { 'x-request-id': 'trace-retry-1' } };
+    expect(mockInstance.post).toHaveBeenNthCalledWith(
+      1,
+      '/query',
+      expect.anything(),
+      expectedConfig,
+    );
+    expect(mockInstance.post).toHaveBeenNthCalledWith(
+      2,
+      '/query',
+      expect.anything(),
+      expectedConfig,
+    );
+  });
+
+  // -------------------------------------------------------------------------
   // Retry logic
   // -------------------------------------------------------------------------
 

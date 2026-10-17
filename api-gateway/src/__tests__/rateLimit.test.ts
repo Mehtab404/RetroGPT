@@ -9,6 +9,7 @@ import { Request, Response, NextFunction } from 'express';
 import { rateLimit } from '../middleware/rateLimit';
 import { RateLimitError } from '../middleware/errorHandler';
 import * as cache from '../services/cache';
+import { logger } from '../utils/logger';
 
 jest.mock('../services/cache', () => ({
   getRedisClient: jest.fn(),
@@ -168,7 +169,7 @@ describe('rateLimit middleware', () => {
     });
 
     it('allows the request when Redis throws on incr', async () => {
-      const consoleSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+      const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
       mockGetRedisClient.mockResolvedValue(
         makeClient({ incr: jest.fn().mockRejectedValue(new Error('connection lost')) }),
       );
@@ -177,7 +178,11 @@ describe('rateLimit middleware', () => {
       await rateLimit({ limit: 1 })(makeReq(), res, next);
 
       expect(next).toHaveBeenCalledWith();
-      consoleSpy.mockRestore();
+      expect(warnSpy).toHaveBeenCalledWith('ratelimit_redis_error', {
+        request_id: undefined,
+        error: expect.any(Error),
+      });
+      warnSpy.mockRestore();
     });
   });
 });

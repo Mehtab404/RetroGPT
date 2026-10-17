@@ -6,6 +6,8 @@
 
 import { EventEmitter } from 'events';
 
+import { logger } from '../utils/logger';
+
 // ---------------------------------------------------------------------------
 // Mock Mongoose before importing the module under test
 // ---------------------------------------------------------------------------
@@ -99,9 +101,9 @@ describe('db/mongo', () => {
       mockConnection.readyState = 0;
       await connectMongo('mongodb://test:27017/db');
       // Verify the 'error' listener was registered by firing it
-      const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+      const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => undefined);
       mockConnection.emit('error', new Error('test error'));
-      expect(errorSpy).toHaveBeenCalledWith('[MongoDB] connection error:', expect.any(Error));
+      expect(errorSpy).toHaveBeenCalledWith('mongo_connection_error', { error: expect.any(Error) });
       errorSpy.mockRestore();
     });
 
@@ -109,10 +111,10 @@ describe('db/mongo', () => {
       mockConnection.readyState = 0;
       await connectMongo('mongodb://test:27017/db');
       // Verify the 'disconnected' listener was registered by firing it
-      const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+      const infoSpy = jest.spyOn(logger, 'info').mockImplementation(() => undefined);
       mockConnection.emit('disconnected');
-      expect(logSpy).toHaveBeenCalledWith('[MongoDB] disconnected');
-      logSpy.mockRestore();
+      expect(infoSpy).toHaveBeenCalledWith('mongo_disconnected');
+      infoSpy.mockRestore();
     });
   });
 

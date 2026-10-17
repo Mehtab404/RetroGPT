@@ -2,6 +2,7 @@ import app from './app';
 import { config } from './config';
 import { connectMongo, disconnectMongo } from './db/mongo';
 import { getRedisClient, disconnectRedis } from './services/cache';
+import { logger } from './utils/logger';
 
 const PORT = config.port;
 
@@ -13,18 +14,16 @@ async function start(): Promise<void> {
   }
 
   const server = app.listen(PORT, () => {
-    console.log(`✓ API Gateway listening on port ${PORT}`);
-    console.log(`✓ Environment: ${config.nodeEnv}`);
-    console.log(`✓ Health check: http://localhost:${PORT}/api/health`);
+    logger.info('gateway_started', { port: PORT, env: config.nodeEnv });
   });
 
   // Graceful shutdown
   async function shutdown(signal: string): Promise<void> {
-    console.log(`\n${signal} received — shutting down gracefully`);
+    logger.info('gateway_stopping', { signal });
     server.close(async () => {
       await disconnectMongo();
       await disconnectRedis();
-      console.log('✓ Server closed');
+      logger.info('gateway_stopped');
       process.exit(0);
     });
   }
@@ -39,17 +38,17 @@ async function start(): Promise<void> {
 
 // Handle uncaught exceptions
 process.on('uncaughtException', (error: Error) => {
-  console.error('Uncaught Exception:', error);
+  logger.error('uncaught_exception', { error });
   process.exit(1);
 });
 
 // Handle unhandled promise rejections
 process.on('unhandledRejection', (reason: unknown) => {
-  console.error('Unhandled Rejection:', reason);
+  logger.error('unhandled_rejection', { error: reason });
   process.exit(1);
 });
 
 start().catch((err: unknown) => {
-  console.error('Failed to start server:', err);
+  logger.error('gateway_start_failed', { error: err });
   process.exit(1);
 });

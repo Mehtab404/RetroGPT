@@ -5,6 +5,7 @@ import { config } from './config';
 import { errorHandler } from './middleware/errorHandler';
 import { requireApiKey } from './middleware/auth';
 import { rateLimit } from './middleware/rateLimit';
+import { requestId } from './middleware/requestId';
 import chatRouter from './routes/chat';
 import sessionsRouter from './routes/sessions';
 
@@ -13,6 +14,11 @@ const app: Application = express();
 // Behind Nginx in production — trust the first proxy so req.ip reflects the
 // real client address (used for per-IP rate limiting).
 app.set('trust proxy', 1);
+
+// Structured logging: tag every request (inbound or generated id) before
+// any other middleware so responses — including auth/rate-limit errors —
+// carry x-request-id and are logged with method/status/duration (#24).
+app.use(requestId);
 
 // Security middleware
 app.use(helmet());

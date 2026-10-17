@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     rerank_model: str = "Xenova/ms-marco-MiniLM-L-6-v2"
     rerank_cache_dir: str = "/data/fastembed_cache"
 
+    # Observability (Issue #24)
+    log_level: str = "INFO"
+
 
 # Global settings instance
 settings = Settings()

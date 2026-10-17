@@ -118,3 +118,28 @@ Reproduce with:
 - Chunk size/overlap stay configurable via `CHUNK_SIZE`/`CHUNK_OVERLAP`; re-run the sweep when the corpus grows.
 - The offline proxy uses local `bge-small` embeddings, not the production Gemini model, and retrieval only (no answers) — treat it as directional evidence.
 - **Pending:** credentialed end-to-end rerun to confirm the pick and record answer-quality metrics (same blocker as ADR 0002/0003).
+
+---
+
+## ADR 0005: Structured JSON Logging and Request-ID Propagation
+
+- **Status:** Accepted
+- **Date:** 2026-10-17
+- **Issue:** #24
+
+### Context
+Issue #24 requires one request to be traceable across both services' logs. The gateway (Node.js/Express) and AI service (Python/FastAPI) are separate runtimes and deployables, and production (#26) will ship container stdout to a log aggregator — so logs must be machine-parseable without regex, and a request must carry one identifier from the gateway through every downstream attempt. Adding `pino`/`winston` (Node.js) or `structlog` (Python) would add dependencies for a small, fixed set of events.
+
+### Decision
+1. **Shared event shape:** both services emit one newline-delimited JSON object per line with the core fields `timestamp` (ISO 8601 UTC, millisecond precision), `level` (`debug` / `info` / `warning` / `error`), `service`, `event` (snake_case name such as `http_request`), optional `request_id`, plus flat context fields (`method`, `path`, `status`, `duration_ms`, `stage_ms`, …). Python records additionally carry `logger` (the module name).
+2. **Zero new dependencies:** hand-rolled loggers — `api-gateway/src/utils/logger.ts` and `ai-service/app/logging_config.py` (`JsonFormatter`) — instead of `pino`/`winston`/`structlog`. `info`/`debug` go to stdout, `warning`/`error` to stderr (12-factor log streams; Docker captures both).
+3. **Request-ID propagation:** the gateway accepts an `x-request-id` header, sanitizes it against `^[A-Za-z0-9._-]{1,64}$` (rejects anything else and generates a UUID), echoes the id on the response, and forwards it to the AI service via `x-request-id`. The same id is reused across gateway retries, so a retried request stays a single trace. The AI service keeps it in a `ContextVar`, so every log line emitted while handling the request — including retrieval warnings — is correlated automatically.
+4. **Middleware instead of framework access logs:** an Express middleware and a pure-ASGI middleware emit the structured `http_request` line (`method`, `path`, `status`, `duration_ms`). Uvicorn's plain-text access log is silenced; `/health` probes are logged at `debug` to keep production noise down. The ASGI implementation is streaming-safe, ready for #25.
+5. **Stage timings:** `/query` emits one `query` event whose `stage_ms` breaks the total down into `embed`, `retrieve` (with `hybrid_search_ms` / `rerank_ms` from `rerank.retrieve()`) and `generate`, alongside `total_ms`, `result_count`, `game_slug` and `top_k`.
+6. **Verbosity:** both services read `LOG_LEVEL` (`debug` | `info` | `warn` | `error`, default `info`), wired through `docker-compose.yml` and documented in `.env.example`.
+
+### Consequences
+- One request can be traced end-to-end with `docker compose logs | grep <request-id>` or any JSON-aware log tool (see the Observability section in the README).
+- No new npm/pip packages to audit or keep current; the level set and event shape stay intentionally small.
+- In Python, request context propagates automatically; in TypeScript the call sites pass `request_id` into log fields explicitly (e.g. `aiClient` retries).
+- Shipping logs to CloudWatch/ECS follows the container-stdout contract and is wired up with the production compose in #26.
