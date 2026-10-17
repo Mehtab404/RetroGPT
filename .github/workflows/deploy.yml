@@ -1,0 +1,133 @@
+name: CD
+
+# Continuous deployment (RetroGPT-PROJECT.md backlog item 27).
+#
+# On merge to main: build the production images, push them to ECR, deploy on
+# the EC2 host (deploy/remote-deploy.sh) and smoke-test /api/health.
+#
+# The deploy job skips with a notice until the AWS/host repository secrets are
+# configured (docs/deployment.md -> "Updates and rollback"), so main stays
+# green without an AWS account. Manual dispatch with an existing image_tag
+# redeploys/rolls back that revision (images are immutable in ECR).
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Existing ECR image tag to deploy (rollback); leave empty to build main"
+        required: false
+        default: ""
+        type: string
+
+# Never run two deploys at once; queue instead of cancelling.
+concurrency:
+  group: cd-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    name: Deployment Preflight
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    steps:
+      - name: Check required repository secrets
+        id: check
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
+          API_KEY: ${{ secrets.API_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          set -u
+          missing=""
+          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY ECR_REGISTRY API_KEY DEPLOY_HOST DEPLOY_SSH_KEY; do
+            if [ -z "${!name:-}" ]; then
+              missing="$missing $name"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::CD skipped - configure the repository secrets:$missing (see docs/deployment.md)"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "Deploy configuration present."
+          fi
+
+  deploy:
+    name: Build, Push, Deploy, Smoke Test
+    needs: preflight
+    if: needs.preflight.outputs.ready == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Resolve image tag
+        id: tag
+        env:
+          INPUT_IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          if [ -n "$INPUT_IMAGE_TAG" ]; then
+            case "$INPUT_IMAGE_TAG" in
+              *[!A-Za-z0-9._-]*) echo "Invalid image tag: $INPUT_IMAGE_TAG" >&2; exit 1 ;;
+            esac
+            echo "tag=$INPUT_IMAGE_TAG" >> "$GITHUB_OUTPUT"
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and push images to ECR
+        if: steps.tag.outputs.build == 'true'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION || 'eu-central-1' }}
+          ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
+          API_KEY: ${{ secrets.API_KEY }}
+          IMAGE_TAG: ${{ steps.tag.outputs.tag }}
+        run: ./deploy/build-push.sh
+
+      - name: Deploy on host
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER || 'ubuntu' }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH || '/opt/retrogpt' }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          IMAGE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes "$DEPLOY_USER@$DEPLOY_HOST" \
+            "cd '$DEPLOY_PATH' && git pull --ff-only && IMAGE_TAG='$IMAGE_TAG' ./deploy/remote-deploy.sh"
+
+      - name: Smoke-test /api/health
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 12); do
+            if curl -fsSL --max-redirs 5 "http://${DEPLOY_HOST}/api/health"; then
+              echo ""
+              echo "Public health check passed."
+              exit 0
+            fi
+            echo "Attempt $attempt: /api/health not healthy yet; retrying in 5s..."
+            sleep 5
+          done
+          echo "Smoke test failed: http://${DEPLOY_HOST}/api/health is not healthy." >&2
+          exit 1
