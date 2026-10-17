@@ -34,15 +34,17 @@ import asyncio
 import logging
 import uuid
 from collections.abc import Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qdrant_models
 from qdrant_client.http.exceptions import UnexpectedResponse
 
 from app.config import settings
-from app.ingestion.chunker import Chunk
 from app.retrieval.bm25 import Bm25Encoder
+
+if TYPE_CHECKING:
+    from app.ingestion.chunker import Chunk
 
 logger = logging.getLogger(__name__)
 

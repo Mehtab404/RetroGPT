@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     # Observability (Issue #24)
     log_level: str = "INFO"
 
+    # Agent mode (Issue #35 / backlog #30)
+    #: Default tool-calling turn budget for POST /agent when the request
+    #: does not specify one (requests may raise this up to the schema cap).
+    agent_default_max_steps: int = 3
+
 
 # Global settings instance
 settings = Settings()
