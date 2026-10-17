@@ -42,6 +42,18 @@ jobs:
       
       - name: Run tests with pytest
         run: pytest --cov=app --cov-report=xml --cov-report=term-missing
+
+      - name: Lint eval with ruff
+        working-directory: .
+        run: ruff check --config ai-service/pyproject.toml eval
+
+      - name: Format check eval with black
+        working-directory: .
+        run: black --check --config ai-service/pyproject.toml eval
+
+      - name: Run eval harness tests
+        working-directory: .
+        run: python -m pytest eval/tests -q
       
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v3

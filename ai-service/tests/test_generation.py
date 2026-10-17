@@ -30,6 +30,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from app.generation.llm import (
     GeminiLLM,
@@ -42,7 +43,6 @@ from app.generation.prompts import RAG_SYSTEM_PROMPT, build_rag_prompt
 from app.main import app
 from app.retrieval.vector_store import SearchResult
 from app.schemas import QueryRequest, QueryResponse, SourceDoc
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -67,15 +67,7 @@ def _mock_httpx_response(json_data: dict, status_code: int = 200) -> MagicMock:
 
 
 def _gemini_ok_response(text: str = "Test answer") -> dict[str, Any]:
-    return {
-        "candidates": [
-            {
-                "content": {
-                    "parts": [{"text": text}]
-                }
-            }
-        ]
-    }
+    return {"candidates": [{"content": {"parts": [{"text": text}]}}]}
 
 
 def _openai_ok_response(text: str = "Test answer") -> dict[str, Any]:
@@ -96,11 +88,17 @@ def _make_search_result(
     score: float = 0.9,
     content: str = "Sample content",
     title: str = "Test Manual",
+    source: str = "/data/raw/asteroids/asteroids_manual.md",
 ) -> SearchResult:
     return SearchResult(
         chunk_id=chunk_id,
         score=score,
-        payload={"chunk_id": chunk_id, "title": title, "content": content},
+        payload={
+            "chunk_id": chunk_id,
+            "title": title,
+            "source": source,
+            "content": content,
+        },
         content=content,
     )
 
@@ -148,7 +146,7 @@ class TestLLMError:
 
     def test_cause_preserved(self) -> None:
         cause = ValueError("root cause")
-        err = LLMError("wrapper") 
+        err = LLMError("wrapper")
         err.__cause__ = cause
         assert err.__cause__ is cause
 
@@ -535,10 +533,7 @@ class TestBuildRagPrompt:
             build_rag_prompt(question="How to score?", context_passages=[])
 
     def test_multiple_passages_all_appear_in_prompt(self) -> None:
-        passages = [
-            {"id": f"doc_{i}", "content": f"Content number {i}"}
-            for i in range(5)
-        ]
+        passages = [{"id": f"doc_{i}", "content": f"Content number {i}"} for i in range(5)]
         prompt = build_rag_prompt(question="q", context_passages=passages)
         for p in passages:
             assert p["content"] in prompt
@@ -566,23 +561,23 @@ class TestQueryRequest:
         assert req.game_slug == "asteroids"
 
     def test_empty_question_fails_validation(self) -> None:
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             QueryRequest(question="")
 
     def test_too_long_question_fails_validation(self) -> None:
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             QueryRequest(question="x" * 1001)
 
     def test_top_k_below_minimum_fails(self) -> None:
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             QueryRequest(question="q", top_k=0)
 
     def test_top_k_above_maximum_fails(self) -> None:
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             QueryRequest(question="q", top_k=21)
 
     def test_extra_fields_forbidden(self) -> None:
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             QueryRequest(question="q", unknown_field="x")
 
 
@@ -592,24 +587,27 @@ class TestSourceDoc:
         assert doc.id == "chunk_1"
         assert doc.score == 0.95
         assert doc.title == ""
+        assert doc.source == ""
         assert doc.snippet == ""
 
     def test_with_all_fields(self) -> None:
         doc = SourceDoc(
             id="chunk_1",
             title="Asteroids Manual",
+            source="/data/raw/asteroids/asteroids_manual.md",
             score=0.91,
             snippet="Large asteroids: 20 points",
         )
         assert doc.title == "Asteroids Manual"
+        assert doc.source == "/data/raw/asteroids/asteroids_manual.md"
         assert doc.snippet == "Large asteroids: 20 points"
 
     def test_score_out_of_range_fails(self) -> None:
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             SourceDoc(id="x", score=1.5)
 
     def test_extra_fields_forbidden(self) -> None:
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             SourceDoc(id="x", score=0.5, surprise="field")
 
 
@@ -628,7 +626,7 @@ class TestQueryResponse:
         assert resp.sources[0].id == "doc_1"
 
     def test_extra_fields_forbidden(self) -> None:
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             QueryResponse(answer="a", latency_ms=1.0, extra="bad")
 
 
@@ -668,9 +666,7 @@ class TestQueryEndpointHappyPath:
 
             # Mock LLM
             mock_llm = AsyncMock()
-            mock_llm.generate = AsyncMock(
-                return_value="Large asteroids are worth 20 points [1]."
-            )
+            mock_llm.generate = AsyncMock(return_value="Large asteroids are worth 20 points [1].")
             mock_llm_factory.return_value = mock_llm
 
             response = client.post(
@@ -741,6 +737,35 @@ class TestQueryEndpointHappyPath:
         data = response.json()
         assert data["sources"][0]["title"] == "Missile Command FAQ"
 
+    def test_query_source_path_populated_from_payload(self) -> None:
+        """SourceDoc.source exposes the payload source path (used by eval)."""
+        search_result = _make_search_result(
+            source="/data/raw/pacman/pacman_manual.md",
+        )
+
+        with (
+            patch("app.main.get_embedding_provider") as mock_embed_factory,
+            patch("app.main.QdrantVectorStore") as mock_vs_cls,
+            patch("app.main.get_llm_provider") as mock_llm_factory,
+        ):
+            mock_embedder = AsyncMock()
+            mock_embedder.embed_query = AsyncMock(return_value=[0.1] * 768)
+            mock_embed_factory.return_value = mock_embedder
+
+            mock_vs = AsyncMock()
+            mock_vs.search = AsyncMock(return_value=[search_result])
+            mock_vs_cls.return_value = mock_vs
+
+            mock_llm = AsyncMock()
+            mock_llm.generate = AsyncMock(return_value="Answer.")
+            mock_llm_factory.return_value = mock_llm
+
+            response = client.post("/query", json={"question": "q?"})
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["sources"][0]["source"] == "/data/raw/pacman/pacman_manual.md"
+
     def test_query_top_k_forwarded_to_search(self) -> None:
         search_result = _make_search_result()
 
@@ -795,6 +820,10 @@ class TestQueryEndpointHappyPath:
         call_kwargs = mock_vs.search.call_args[1]
         # filter must be set (not None) when game_slug is provided
         assert call_kwargs["filter"] is not None
+        # …and it must match the payload key used at ingestion time ("game",
+        # not "game_slug").
+        assert call_kwargs["filter"].must[0].key == "game"
+        assert call_kwargs["filter"].must[0].match.value == "asteroids"
 
 
 class TestQueryEndpointNoResults:
@@ -835,9 +864,7 @@ class TestQueryEndpointErrors:
 
         with patch("app.main.get_embedding_provider") as mock_embed_factory:
             mock_embedder = AsyncMock()
-            mock_embedder.embed_query = AsyncMock(
-                side_effect=EmbeddingError("API down")
-            )
+            mock_embedder.embed_query = AsyncMock(side_effect=EmbeddingError("API down"))
             mock_embed_factory.return_value = mock_embedder
 
             response = client.post("/query", json={"question": "q?"})
@@ -857,9 +884,7 @@ class TestQueryEndpointErrors:
             mock_embed_factory.return_value = mock_embedder
 
             mock_vs = AsyncMock()
-            mock_vs.search = AsyncMock(
-                side_effect=VectorStoreError("Qdrant down")
-            )
+            mock_vs.search = AsyncMock(side_effect=VectorStoreError("Qdrant down"))
             mock_vs_cls.return_value = mock_vs
 
             response = client.post("/query", json={"question": "q?"})
@@ -884,9 +909,7 @@ class TestQueryEndpointErrors:
             mock_vs_cls.return_value = mock_vs
 
             mock_llm = AsyncMock()
-            mock_llm.generate = AsyncMock(
-                side_effect=LLMError("LLM timed out")
-            )
+            mock_llm.generate = AsyncMock(side_effect=LLMError("LLM timed out"))
             mock_llm_factory.return_value = mock_llm
 
             response = client.post("/query", json={"question": "q?"})
@@ -903,9 +926,7 @@ class TestQueryEndpointErrors:
         assert response.status_code == 422
 
     def test_top_k_too_large_returns_422(self) -> None:
-        response = client.post(
-            "/query", json={"question": "q?", "top_k": 99}
-        )
+        response = client.post("/query", json={"question": "q?", "top_k": 99})
         assert response.status_code == 422
 
     def test_no_game_slug_no_filter(self) -> None:

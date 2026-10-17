@@ -16,7 +16,6 @@ from typing import Annotated
 
 from pydantic import BaseModel, Field
 
-
 # ---------------------------------------------------------------------------
 # Request model
 # ---------------------------------------------------------------------------
@@ -75,6 +74,9 @@ class SourceDoc(BaseModel):
     Attributes:
         id:       Unique chunk identifier (e.g. ``"asteroids_manual_p3_c2"``).
         title:    Human-readable document title, if available.
+        source:   Source file path the passage came from (e.g.
+                  ``"/data/raw/asteroids/asteroids_manual.md"``). Used by the
+                  evaluation script to match expected source documents.
         score:    Cosine similarity score from the vector store (0–1).
         snippet:  Short excerpt from the retrieved passage (≤ 300 chars).
     """
@@ -88,6 +90,13 @@ class SourceDoc(BaseModel):
     title: Annotated[
         str,
         Field(default="", description="Human-readable document title."),
+    ] = ""
+    source: Annotated[
+        str,
+        Field(
+            default="",
+            description="Source file path the passage was retrieved from.",
+        ),
     ] = ""
     score: Annotated[
         float,

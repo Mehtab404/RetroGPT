@@ -71,6 +71,7 @@ services:
     volumes:
       - ./ai-service:/app
       - ./data:/data
+      - ./eval:/eval
     environment:
       - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
       - LLM_MODEL=${LLM_MODEL:-gemini-1.5-flash}
