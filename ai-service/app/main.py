@@ -12,7 +12,7 @@ from app.config import settings
 from app.generation.llm import LLMError, get_llm_provider
 from app.generation.prompts import build_rag_prompt
 from app.ingestion.embeddings import EmbeddingError, get_embedding_provider
-from app.retrieval.hybrid import hybrid_search
+from app.retrieval.rerank import retrieve
 from app.retrieval.vector_store import QdrantVectorStore, VectorStoreError
 from app.schemas import QueryRequest, QueryResponse, SourceDoc
 
@@ -107,9 +107,10 @@ async def query(request: QueryRequest) -> QueryResponse:
 
     Pipeline:
     1. Embed the question using the configured embedding provider.
-    2. Retrieve the top-K passages with hybrid search (dense + BM25 sparse
-       vectors fused via RRF); falls back to dense-only when BM25 stats or
-       sparse vectors are unavailable.
+    2. Retrieve the best passages with the two-stage pipeline: hybrid
+       search (dense + BM25 sparse fused via RRF) over a wide candidate
+       pool, then cross-encoder re-ranking to the top-K.  Each stage fails
+       open (dense-only, then hybrid order) when unavailable.
     3. Build a RAG prompt from the retrieved context + question.
     4. Generate an answer with the configured LLM provider.
     5. Return the answer with source citations and latency.
@@ -161,7 +162,7 @@ async def query(request: QueryRequest) -> QueryResponse:
 
     vector_store = QdrantVectorStore(client=qdrant_client)
     try:
-        search_results = await hybrid_search(
+        search_results = await retrieve(
             vector_store,
             request.question,
             query_vector,

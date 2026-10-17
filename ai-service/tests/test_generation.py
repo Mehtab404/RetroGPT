@@ -104,14 +104,15 @@ def _make_search_result(
 
 
 @pytest.fixture(autouse=True)
-def _dense_only_retrieval(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Force /query onto the deterministic dense-only path.
+def _deterministic_retrieval(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Force /query onto the deterministic dense-only, no-rerank path.
 
-    Without this, hybrid_search() would try to load BM25 statistics from
-    ``settings.bm25_stats_path``, which may or may not exist on the test
-    host (created by a previous pipeline run).
+    Without this, the endpoint would try to load BM25 statistics from
+    ``settings.bm25_stats_path`` and the fastembed cross-encoder model,
+    neither of which is guaranteed (or appropriate) on the test host.
     """
     monkeypatch.setattr("app.retrieval.hybrid.get_bm25_encoder", lambda path=None: None)
+    monkeypatch.setattr("app.retrieval.rerank.get_reranker", lambda: None)
 
 
 # ---------------------------------------------------------------------------
@@ -778,7 +779,7 @@ class TestQueryEndpointHappyPath:
         assert data["sources"][0]["source"] == "/data/raw/pacman/pacman_manual.md"
 
     def test_query_top_k_forwarded_to_search(self) -> None:
-        search_result = _make_search_result()
+        search_results = [_make_search_result(chunk_id=f"c{i}") for i in range(10)]
 
         with (
             patch("app.main.get_embedding_provider") as mock_embed_factory,
@@ -790,18 +791,54 @@ class TestQueryEndpointHappyPath:
             mock_embed_factory.return_value = mock_embedder
 
             mock_vs = AsyncMock()
-            mock_vs.search = AsyncMock(return_value=[search_result])
+            mock_vs.search = AsyncMock(return_value=search_results)
             mock_vs_cls.return_value = mock_vs
 
             mock_llm = AsyncMock()
             mock_llm.generate = AsyncMock(return_value="Answer.")
             mock_llm_factory.return_value = mock_llm
 
-            client.post("/query", json={"question": "q?", "top_k": 8})
+            response = client.post("/query", json={"question": "q?", "top_k": 8})
 
+        assert response.status_code == 200
+        # The candidate pool (retrieval_top_k=20) is fetched wide, then the
+        # requested top_k is kept after retrieval/re-ranking.
         mock_vs.search.assert_called_once()
         call_kwargs = mock_vs.search.call_args[1]
-        assert call_kwargs["top_k"] == 8
+        assert call_kwargs["top_k"] == 20
+        assert len(response.json()["sources"]) == 8
+
+    def test_query_reranks_candidates_when_reranker_available(self) -> None:
+        results = [
+            _make_search_result(chunk_id="first", content="first passage"),
+            _make_search_result(chunk_id="second", content="second passage"),
+        ]
+        fake_reranker = MagicMock()
+        fake_reranker.rerank = AsyncMock(return_value=[results[1], results[0]])
+
+        with (
+            patch("app.main.get_embedding_provider") as mock_embed_factory,
+            patch("app.main.QdrantVectorStore") as mock_vs_cls,
+            patch("app.main.get_llm_provider") as mock_llm_factory,
+            patch("app.retrieval.rerank.get_reranker", return_value=fake_reranker),
+        ):
+            mock_embedder = AsyncMock()
+            mock_embedder.embed_query = AsyncMock(return_value=[0.1] * 768)
+            mock_embed_factory.return_value = mock_embedder
+
+            mock_vs = AsyncMock()
+            mock_vs.search = AsyncMock(return_value=results)
+            mock_vs_cls.return_value = mock_vs
+
+            mock_llm = AsyncMock()
+            mock_llm.generate = AsyncMock(return_value="Answer.")
+            mock_llm_factory.return_value = mock_llm
+
+            response = client.post("/query", json={"question": "q?"})
+
+        assert response.status_code == 200
+        data = response.json()
+        assert [s["id"] for s in data["sources"]] == ["second", "first"]
 
     def test_query_game_slug_filter_applied(self) -> None:
         search_result = _make_search_result()

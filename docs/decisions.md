@@ -55,3 +55,27 @@ ADR 0001 committed RetroGPT to hybrid retrieval (dense embeddings + BM25 sparse 
 - Ingestion is two-phase: load + chunk *all* files, fit BM25 over the whole run's corpus, then embed + upsert per file.
 - Collection and stats file must be rebuilt together; stale stats are rejected via the persisted format version.
 - **Pending:** end-to-end hybrid evaluation numbers (README metrics table) require a valid `GOOGLE_API_KEY` for embeddings; the dense baseline and hybrid rerun are queued until credentials are available.
+
+---
+
+## ADR 0003: Cross-Encoder Re-Ranking with fastembed (ONNX)
+
+- **Status:** Accepted
+- **Date:** 2026-10-17
+- **Issue:** #21
+
+### Context
+ADR 0001 includes cross-encoder re-ranking after hybrid retrieval. The standard implementation (`sentence-transformers` `CrossEncoder`) drags in PyTorch (~1 GB in CI images and slower container builds) for a model that runs on CPU just as well through ONNX Runtime.
+
+### Decision
+1. **Runtime:** `fastembed` (`TextCrossEncoder`, ONNX Runtime) with the `Xenova/ms-marco-MiniLM-L-6-v2` model — same MiniLM cross-encoder family used by `sentence-transformers`, without the PyTorch dependency. Added to `requirements.txt` (pinned).
+2. **Two-stage retrieval** (`app/retrieval/rerank.py: retrieve()`): hybrid search recalls a wide candidate pool (`max(top_k, RETRIEVAL_TOP_K)` = 20 by default), the cross-encoder scores every `(query, passage)` pair, and the best `top_k` (default `RERANK_TOP_N` = 5) are kept for generation.
+3. **Score display:** cross-encoder logits are unbounded (e.g. `+9.8` / `-11.4`), so they are squashed with a logistic sigmoid into `(0, 1)` to keep the frontend's percentage-match display and `SourceDoc.score` validation meaningful.
+4. **Lazy + fail-open:** the model is loaded on first use and cached under `/data/fastembed_cache`; if `fastembed` is missing or scoring fails, retrieval silently falls back to the hybrid RRF order. No query ever fails because of re-ranking.
+5. Re-ranking can be disabled entirely via `RERANK_ENABLED=false` (e.g. for latency comparisons in #22).
+
+### Consequences
+- Re-ranking adds one CPU inference pass over ~20 candidates (expected low-hundreds of ms; exact latency to be recorded with the eval rerun).
+- Container/CI images stay lightweight (ONNX Runtime ~24 MB vs PyTorch ~1 GB).
+- First request after a restart downloads the model (~90 MB) unless the cache volume is warm.
+- **Pending:** eval rerun for accuracy/latency numbers requires a valid `GOOGLE_API_KEY` (same blocker as ADR 0002).

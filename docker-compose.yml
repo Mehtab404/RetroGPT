@@ -88,6 +88,9 @@ services:
       - HYBRID_SEARCH_ENABLED=${HYBRID_SEARCH_ENABLED:-true}
       - HYBRID_PREFETCH_K=${HYBRID_PREFETCH_K:-20}
       - BM25_STATS_PATH=${BM25_STATS_PATH:-/data/bm25_stats.json}
+      - RERANK_ENABLED=${RERANK_ENABLED:-true}
+      - RERANK_MODEL=${RERANK_MODEL:-Xenova/ms-marco-MiniLM-L-6-v2}
+      - RERANK_CACHE_DIR=${RERANK_CACHE_DIR:-/data/fastembed_cache}
     depends_on:
       qdrant:
         condition: service_healthy

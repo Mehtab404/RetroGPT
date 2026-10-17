@@ -37,6 +37,11 @@ class Settings(BaseSettings):
     #: Persisted BM25 corpus statistics (written at ingestion time).
     bm25_stats_path: str = "/data/bm25_stats.json"
 
+    # Cross-encoder re-ranking (Issue #21)
+    rerank_enabled: bool = True
+    rerank_model: str = "Xenova/ms-marco-MiniLM-L-6-v2"
+    rerank_cache_dir: str = "/data/fastembed_cache"
+
 
 # Global settings instance
 settings = Settings()
