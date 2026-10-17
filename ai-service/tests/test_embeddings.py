@@ -15,36 +15,30 @@ asyncio tests use pytest-asyncio.
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
 from app.ingestion.embeddings import (
+    _RETRYABLE_STATUS_CODES,
     EmbeddingError,
     EmbeddingProvider,
     GeminiEmbedding,
     OpenAIEmbedding,
-    _GEMINI_BATCH_SIZE,
-    _OPENAI_BATCH_SIZE,
-    _RETRYABLE_STATUS_CODES,
     get_embedding_provider,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _fake_gemini_response(texts: list[str], dims: int = 4) -> dict[str, Any]:
     """Build a minimal Gemini batchEmbedContents response."""
     return {
-        "embeddings": [
-            {"values": [float(i + j) for j in range(dims)]}
-            for i, _ in enumerate(texts)
-        ]
+        "embeddings": [{"values": [float(i + j) for j in range(dims)]} for i, _ in enumerate(texts)]
     }
 
 
@@ -97,6 +91,7 @@ class TestEmbeddingProviderABC:
         class Partial(EmbeddingProvider):
             async def embed_documents(self, texts):
                 return []
+
             # Missing embed_query
 
         with pytest.raises(TypeError):
@@ -163,7 +158,9 @@ class TestGeminiEmbeddingHappyPath:
 
         # Verify task type was RETRIEVAL_QUERY
         call_kwargs = mock_client.post.call_args
-        payload = call_kwargs.kwargs["json"] if call_kwargs.kwargs.get("json") else call_kwargs.args[1]
+        payload = (
+            call_kwargs.kwargs["json"] if call_kwargs.kwargs.get("json") else call_kwargs.args[1]
+        )
         for req in payload["requests"]:
             assert req["taskType"] == "RETRIEVAL_QUERY"
 
@@ -225,7 +222,9 @@ class TestGeminiEmbeddingBatching:
             nonlocal call_count
             batch = kwargs["json"]["requests"]
             call_count += 1
-            return _mock_httpx_response(_fake_gemini_response([r["content"]["parts"][0]["text"] for r in batch]))
+            return _mock_httpx_response(
+                _fake_gemini_response([r["content"]["parts"][0]["text"] for r in batch])
+            )
 
         with patch("httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
@@ -278,9 +277,7 @@ class TestGeminiEmbeddingBatching:
             batch_texts = [r["content"]["parts"][0]["text"] for r in reqs]
             # Use a unique sentinel float per text for order verification.
             values = [float(ord(t[0])) for t in batch_texts]
-            return _mock_httpx_response(
-                {"embeddings": [{"values": [v]} for v in values]}
-            )
+            return _mock_httpx_response({"embeddings": [{"values": [v]} for v in values]})
 
         with patch("httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
@@ -406,6 +403,7 @@ class TestGeminiEmbeddingRetry:
             mock_client_cls.return_value = mock_client
 
             sleep_args: list[float] = []
+
             async def mock_sleep(delay):
                 sleep_args.append(delay)
 
@@ -429,9 +427,7 @@ class TestGeminiEmbeddingRetry:
             mock_client = AsyncMock()
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=False)
-            mock_client.post = AsyncMock(
-                side_effect=[httpx.ConnectError("timeout"), ok]
-            )
+            mock_client.post = AsyncMock(side_effect=[httpx.ConnectError("timeout"), ok])
             mock_client_cls.return_value = mock_client
 
             provider = GeminiEmbedding(
@@ -751,6 +747,7 @@ class TestOpenAIEmbeddingRetry:
             mock_client_cls.return_value = mock_client
 
             sleep_args: list[float] = []
+
             async def mock_sleep(delay):
                 sleep_args.append(delay)
 

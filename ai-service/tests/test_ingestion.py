@@ -11,7 +11,6 @@ Covers:
 
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -30,7 +29,6 @@ from app.ingestion.loaders import (
     _infer_game_name,
     get_loader_for,
 )
-
 
 # ===========================================================================
 # Fixtures
@@ -348,9 +346,9 @@ class TestRecursiveCharacterTextSplitter:
         splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=20)
         chunks = splitter.split_document(doc)
         for chunk in chunks:
-            assert len(chunk.content) <= chunk_size, (
-                f"Chunk length {len(chunk.content)} exceeds {chunk_size}: {chunk.content!r}"
-            )
+            assert (
+                len(chunk.content) <= chunk_size
+            ), f"Chunk length {len(chunk.content)} exceeds {chunk_size}: {chunk.content!r}"
 
     def test_chunks_preserve_source_metadata(self, asteroids_md: Path) -> None:
         loader = MarkdownLoader()
@@ -428,9 +426,9 @@ class TestRecursiveCharacterTextSplitter:
                     break
             if overlap_found:
                 break
-        assert overlap_found, (
-            "Expected to find overlapping text between at least one pair of consecutive chunks"
-        )
+        assert (
+            overlap_found
+        ), "Expected to find overlapping text between at least one pair of consecutive chunks"
 
     def test_split_documents_processes_all(self, tmp_dir: Path) -> None:
         """split_documents should produce chunks for every document in the list."""

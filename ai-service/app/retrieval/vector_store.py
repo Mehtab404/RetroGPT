@@ -27,7 +27,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qdrant_models
@@ -193,9 +194,7 @@ class QdrantVectorStore:
             VectorStoreError: If Qdrant returns an unexpected error.
         """
         try:
-            await asyncio.to_thread(
-                self._client.delete_collection, self.collection
-            )
+            await asyncio.to_thread(self._client.delete_collection, self.collection)
             logger.info("Deleted Qdrant collection '%s'.", self.collection)
         except Exception as exc:
             raise VectorStoreError(
@@ -259,7 +258,7 @@ class QdrantVectorStore:
                     vector=list(vec),
                     payload={**chunk.metadata, "content": chunk.content},
                 )
-                for i, (chunk, vec) in enumerate(zip(batch_chunks, batch_vectors))
+                for i, (chunk, vec) in enumerate(zip(batch_chunks, batch_vectors, strict=True))
             ]
 
             try:
@@ -321,9 +320,7 @@ class QdrantVectorStore:
                 with_payload=True,
             )
         except Exception as exc:
-            raise VectorStoreError(
-                f"Qdrant search failed in '{self.collection}': {exc}"
-            ) from exc
+            raise VectorStoreError(f"Qdrant search failed in '{self.collection}': {exc}") from exc
 
         results: list[SearchResult] = []
         for hit in hits:
@@ -362,13 +359,9 @@ class QdrantVectorStore:
             # 404 → collection not found → treat as 0 points.
             if exc.status_code == 404:
                 return 0
-            raise VectorStoreError(
-                f"Failed to count points in '{self.collection}': {exc}"
-            ) from exc
+            raise VectorStoreError(f"Failed to count points in '{self.collection}': {exc}") from exc
         except Exception as exc:
-            raise VectorStoreError(
-                f"Failed to count points in '{self.collection}': {exc}"
-            ) from exc
+            raise VectorStoreError(f"Failed to count points in '{self.collection}': {exc}") from exc
 
     def close(self) -> None:
         """Close the underlying Qdrant client connection."""

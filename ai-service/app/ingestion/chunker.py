@@ -14,12 +14,11 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Sequence
 
 from app.config import settings
 from app.ingestion.loaders import Document
-
 
 # ---------------------------------------------------------------------------
 # Data model
@@ -215,11 +214,11 @@ def _split_on_separators(
 # Ordered from coarsest to finest — mirrors LangChain's default separators
 # for Markdown/plain text.
 _DEFAULT_SEPARATORS: list[str] = [
-    r"\n\n",      # paragraph / section break
-    r"\n",        # line break
+    r"\n\n",  # paragraph / section break
+    r"\n",  # line break
     r"(?<=\.) ",  # sentence boundary (after period + space)
-    r" ",         # word boundary
-    r"",          # character-by-character fallback
+    r" ",  # word boundary
+    r"",  # character-by-character fallback
 ]
 
 

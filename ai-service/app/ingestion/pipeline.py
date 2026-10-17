@@ -30,7 +30,6 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from app.config import settings
 from app.ingestion.chunker import Chunk, RecursiveCharacterTextSplitter
 from app.ingestion.embeddings import EmbeddingProvider, get_embedding_provider
 from app.ingestion.loaders import Document, get_loader_for
@@ -178,9 +177,7 @@ class IngestionPipeline:
         )
         return result
 
-    async def ingest_documents(
-        self, documents: list[Document]
-    ) -> IngestionResult:
+    async def ingest_documents(self, documents: list[Document]) -> IngestionResult:
         """Ingest pre-loaded :class:`~app.ingestion.loaders.Document` objects.
 
         Useful when the caller has already loaded documents (e.g. from

@@ -139,8 +139,7 @@ class LLMProvider(ABC):
             except httpx.HTTPStatusError as exc:
                 if exc.response.status_code not in _RETRYABLE_STATUS_CODES:
                     raise LLMError(
-                        f"LLM API error {exc.response.status_code}: "
-                        f"{exc.response.text[:200]}"
+                        f"LLM API error {exc.response.status_code}: " f"{exc.response.text[:200]}"
                     ) from exc
                 last_exc = exc
                 logger.warning(
@@ -228,10 +227,7 @@ class GeminiLLM(LLMProvider):
 
     async def _call_api(self, prompt: str) -> str:
         """Make a single Gemini API call (no retry logic here)."""
-        url = (
-            f"{_GEMINI_BASE_URL}/models/{self.model}:generateContent"
-            f"?key={self._api_key}"
-        )
+        url = f"{_GEMINI_BASE_URL}/models/{self.model}:generateContent" f"?key={self._api_key}"
         payload: dict[str, Any] = {
             "contents": [
                 {
@@ -252,9 +248,7 @@ class GeminiLLM(LLMProvider):
         try:
             return data["candidates"][0]["content"]["parts"][0]["text"]
         except (KeyError, IndexError) as exc:
-            raise LLMError(
-                f"Unexpected Gemini response structure: {data}"
-            ) from exc
+            raise LLMError(f"Unexpected Gemini response structure: {data}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -336,9 +330,7 @@ class OpenAILLM(LLMProvider):
         try:
             return data["choices"][0]["message"]["content"]
         except (KeyError, IndexError) as exc:
-            raise LLMError(
-                f"Unexpected OpenAI response structure: {data}"
-            ) from exc
+            raise LLMError(f"Unexpected OpenAI response structure: {data}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -369,6 +361,4 @@ def get_llm_provider(
         return GeminiLLM(**kwargs)
     if chosen == "openai":
         return OpenAILLM(**kwargs)
-    raise ValueError(
-        f"Unknown LLM provider {chosen!r}. Expected 'gemini' or 'openai'."
-    )
+    raise ValueError(f"Unknown LLM provider {chosen!r}. Expected 'gemini' or 'openai'.")
