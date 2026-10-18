@@ -391,6 +391,35 @@ class TestQueryStreamEndpoint:
         done = events[-1][1]
         assert done["latency_ms"] >= 0.0
 
+    def test_stream_normalizes_full_width_citations_across_chunks(self) -> None:
+        search_result = _make_search_result(chunk_id="pacman_p1_c1")
+        # Markers are deliberately split across chunk boundaries.
+        llm = _streaming_llm(
+            [
+                "Pellets are worth 50 points 【",
+                "2】, ghosts flee for 6-10 seconds ［",
+                "1］.",
+            ]
+        )
+
+        patches = _patch_deps([search_result], llm)
+        try:
+            response = client.post("/query/stream", json={"question": "q?"})
+        finally:
+            for patcher in patches[:3]:
+                patcher.stop()
+
+        assert response.status_code == 200
+        events = _parse_sse(response.text)
+        names = [name for name, _ in events]
+        assert names[0] == "meta"
+        assert names[-1] == "done"
+
+        tokens = "".join(payload["text"] for name, payload in events if name == "token")
+        assert tokens == "Pellets are worth 50 points [2], ghosts flee for 6-10 seconds [1]."
+        assert "【" not in tokens
+        assert "］" not in tokens
+
     def test_no_context_streams_single_dont_know_token(self) -> None:
         llm = _streaming_llm(["unused"])
 

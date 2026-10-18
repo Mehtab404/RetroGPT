@@ -15,6 +15,7 @@ from qdrant_client.http.exceptions import UnexpectedResponse
 from app.agent.loop import run_agent
 from app.agent.tools import ToolRegistry
 from app.config import settings
+from app.generation.citations import CitationStreamNormalizer, normalize_citations
 from app.generation.llm import LLMError, get_llm_provider
 from app.generation.prompts import build_rag_prompt
 from app.ingestion.embeddings import EmbeddingError, get_embedding_provider
@@ -197,6 +198,10 @@ async def query(request: QueryRequest) -> QueryResponse:
         ) from exc
     stage_ms["generate"] = _elapsed_ms(t_stage)
 
+    # Normalize full-width citation brackets (e.g. 【2】 → [2]) so the wire
+    # contract stays ASCII [N] — see app.generation.citations.
+    answer = normalize_citations(answer)
+
     # ------------------------------------------------------------------
     # 5. Build response with sources
     # ------------------------------------------------------------------
@@ -287,7 +292,7 @@ async def agent_answer(request: AgentRequest) -> AgentResponse:
     )
 
     return AgentResponse(
-        answer=result.answer,
+        answer=normalize_citations(result.answer),
         sources=_build_sources(result.sources),
         tools_used=[
             AgentToolCall(name=str(call["name"]), arguments=call.get("arguments") or {})
@@ -516,6 +521,7 @@ async def _stream_answer(
     yield _sse_event("meta", {"sources": [source.model_dump() for source in sources]})
 
     llm = get_llm_provider()
+    normalizer = CitationStreamNormalizer()
     chunk_count = 0
     t_stage = time.monotonic()
     try:
@@ -523,8 +529,14 @@ async def _stream_answer(
             if not chunk:
                 continue
             chunk_count += 1
-            yield _sse_event("token", {"text": chunk})
+            text = normalizer.feed(chunk)
+            if text:
+                yield _sse_event("token", {"text": text})
     except LLMError as exc:
+        # Release any held text so no generated content is dropped.
+        tail = normalizer.flush()
+        if tail:
+            yield _sse_event("token", {"text": tail})
         stage_ms["generate"] = _elapsed_ms(t_stage)
         _log_query(
             stage_ms=stage_ms,
@@ -542,6 +554,10 @@ async def _stream_answer(
         )
         return
 
+    # Emit any text held back at the end of the stream (incomplete markers).
+    tail = normalizer.flush()
+    if tail:
+        yield _sse_event("token", {"text": tail})
     stage_ms["generate"] = _elapsed_ms(t_stage)
     total_ms = _elapsed_ms(t_start)
     _log_query(

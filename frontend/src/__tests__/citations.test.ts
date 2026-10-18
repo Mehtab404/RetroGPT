@@ -52,6 +52,68 @@ describe('parseCitations()', () => {
   });
 });
 
+describe('parseCitations() with full-width bracket variants', () => {
+  it('recognizes CJK lenticular brackets (【N】)', () => {
+    const segments = parseCitations('Worth 50 points 【2】.', 2);
+
+    expect(segments).toEqual([
+      { type: 'text', content: 'Worth 50 points ' },
+      { type: 'citation', index: 2, content: '[2]' },
+      { type: 'text', content: '.' },
+    ]);
+  });
+
+  it('recognizes full-width square brackets (［N］)', () => {
+    const segments = parseCitations('Worth 50 points ［2］.', 2);
+
+    expect(segments).toEqual([
+      { type: 'text', content: 'Worth 50 points ' },
+      { type: 'citation', index: 2, content: '[2]' },
+      { type: 'text', content: '.' },
+    ]);
+  });
+
+  it('recognizes mixed bracket pairs', () => {
+    const segments = parseCitations('A 【1] B ［2】 C [3］ D', 3);
+
+    expect(segments).toEqual([
+      { type: 'text', content: 'A ' },
+      { type: 'citation', index: 1, content: '[1]' },
+      { type: 'text', content: ' B ' },
+      { type: 'citation', index: 2, content: '[2]' },
+      { type: 'text', content: ' C ' },
+      { type: 'citation', index: 3, content: '[3]' },
+      { type: 'text', content: ' D' },
+    ]);
+  });
+
+  it('handles ASCII and full-width markers together in one answer', () => {
+    const segments = parseCitations('Ghosts [1] flee for 6-10 seconds 【2】.', 2);
+
+    expect(segments).toEqual([
+      { type: 'text', content: 'Ghosts ' },
+      { type: 'citation', index: 1, content: '[1]' },
+      { type: 'text', content: ' flee for 6-10 seconds ' },
+      { type: 'citation', index: 2, content: '[2]' },
+      { type: 'text', content: '.' },
+    ]);
+  });
+
+  it('leaves out-of-range full-width citations as plain text', () => {
+    const segments = parseCitations('See 【5】 for details.', 2);
+
+    expect(segments).toEqual([{ type: 'text', content: 'See 【5】 for details.' }]);
+  });
+
+  it('treats malformed full-width groups as plain text', () => {
+    const text = 'Use 【0】, 【abc】 or 【】 notation.';
+
+    const segments = parseCitations(text, 3);
+
+    expect(segments).toEqual([{ type: 'text', content: text }]);
+  });
+});
+
 describe('sourceAnchorId()', () => {
   it('builds a stable anchor id from message id and index', () => {
     expect(sourceAnchorId('msg-1', 2)).toBe('source-msg-1-2');

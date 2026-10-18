@@ -2,8 +2,10 @@
  * Citation parsing for assistant answers.
  *
  * The LLM is instructed to cite sources inline as `[N]` (1-based passage
- * numbers).  These helpers split an answer into text and citation segments
- * so the UI can render clickable citation references.
+ * numbers), but it occasionally emits full-width variants such as `【N】`
+ * or `［N］` (even mixed pairs like `【2]`).  These helpers accept every
+ * bracket family, split an answer into text and citation segments, and
+ * normalize the rendered marker text back to ASCII.
  */
 
 export interface TextSegment {
@@ -15,7 +17,7 @@ export interface CitationSegment {
   type: 'citation';
   /** 1-based source number as written in the answer. */
   index: number;
-  /** The raw matched text, e.g. `[2]`. */
+  /** Normalized marker text, always ASCII, e.g. `[2]`. */
   content: string;
 }
 
@@ -24,16 +26,18 @@ export type AnswerSegment = TextSegment | CitationSegment;
 /**
  * Split an answer string into text and `[N]` citation segments.
  *
- * Only citation numbers that fall within `[1, maxSources]` are turned into
- * citation segments; anything else stays plain text so stray brackets in the
- * prose are not misinterpreted.
+ * Accepts ASCII brackets and the full-width variants `【N】` / `［N］`
+ * (mixed pairs included).  Only citation numbers that fall within
+ * `[1, maxSources]` are turned into citation segments; anything else stays
+ * plain text so stray brackets in the prose are not misinterpreted.
  *
  * @param answer      Raw assistant answer text.
  * @param maxSources  Number of sources available (defaults to `Infinity`).
  */
 export function parseCitations(answer: string, maxSources = Infinity): AnswerSegment[] {
   const segments: AnswerSegment[] = [];
-  const pattern = /\[(\d+)\]/g;
+  // Opening/closing bracket families may be mixed (e.g. `【2]`).
+  const pattern = /[【［[](\d+)[\]】］]/g;
 
   let lastIndex = 0;
   let match: RegExpExecArray | null;
@@ -49,7 +53,7 @@ export function parseCitations(answer: string, maxSources = Infinity): AnswerSeg
     if (match.index > lastIndex) {
       segments.push({ type: 'text', content: answer.slice(lastIndex, match.index) });
     }
-    segments.push({ type: 'citation', index, content: match[0] });
+    segments.push({ type: 'citation', index, content: `[${index}]` });
     lastIndex = match.index + match[0].length;
   }
 
