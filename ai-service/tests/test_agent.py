@@ -36,6 +36,7 @@ from app.agent.tools import GAME_CATALOG, GAME_SLUGS, ToolRegistry
 from app.generation.llm import (
     AgentTurn,
     GeminiLLM,
+    GroqLLM,
     LLMError,
     LLMProvider,
     OpenAILLM,
@@ -661,6 +662,97 @@ class TestOpenAIToolCalling:
         }
 
 
+class TestGroqToolCalling:
+    @pytest.mark.asyncio
+    async def test_parses_tool_calls_with_ids(self) -> None:
+        provider = GroqLLM(model="openai/gpt-oss-120b", api_key="test-key", jitter=False)
+        resp = _mock_httpx_response(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call_abc",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "compare_games",
+                                        "arguments": '{"game_a": "pacman", "game_b": "centipede"}',
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+        )
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client.post = AsyncMock(return_value=resp)
+            mock_client_cls.return_value = mock_client
+
+            turn = await provider.generate_with_tools(
+                [{"role": "user", "content": "Compare them"}], provider_tools()
+            )
+
+        assert turn.text is None
+        assert len(turn.tool_calls) == 1
+        assert turn.tool_calls[0].name == "compare_games"
+        assert turn.tool_calls[0].arguments == {"game_a": "pacman", "game_b": "centipede"}
+        assert turn.tool_calls[0].call_id == "call_abc"
+
+    @pytest.mark.asyncio
+    async def test_payload_omits_message_name_and_uses_max_completion_tokens(
+        self,
+    ) -> None:
+        """Groq rejects messages[].name and requires max_completion_tokens."""
+        provider = GroqLLM(model="openai/gpt-oss-120b", api_key="key", jitter=False)
+        resp = _mock_httpx_response(
+            {"choices": [{"message": {"role": "assistant", "content": "done"}}]}
+        )
+        messages = [
+            {"role": "system", "content": "system rules"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "name": "search_game_docs",
+                        "arguments": {"game": "pacman"},
+                        "call_id": "call_1",
+                    }
+                ],
+            },
+            {"role": "tool", "name": "search_game_docs", "tool_call_id": "call_1", "content": "{}"},
+        ]
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client.post = AsyncMock(return_value=resp)
+            mock_client_cls.return_value = mock_client
+
+            await provider.generate_with_tools(messages, provider_tools())
+
+        payload = mock_client.post.call_args.kwargs["json"]
+        # Groq returns 400 if any message carries the optional `name` field.
+        assert all("name" not in message for message in payload["messages"])
+        assert payload["max_completion_tokens"] == 1024
+        assert "max_tokens" not in payload
+        assert payload["tools"][0]["function"]["name"] == "search_game_docs"
+        assert payload["messages"][-1] == {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": "{}",
+        }
+
+
 def provider_tools() -> list[dict[str, Any]]:
     """Minimal tool spec list for provider translation tests."""
     return [
@@ -763,6 +855,27 @@ class TestAgentEndpoint:
                 "arguments": {"game": "asteroids", "question": "scoring"},
             }
         ]
+
+    def test_answer_normalizes_full_width_citations(self) -> None:
+        scripted = ScriptedLLM(
+            turns=[
+                AgentTurn(
+                    text="Large asteroids are worth 20 points 【1】.",
+                    tool_calls=[],
+                )
+            ]
+        )
+
+        with patch("app.main.get_llm_provider") as mock_llm_factory:
+            mock_llm_factory.return_value = scripted
+
+            response = client.post(
+                "/agent",
+                json={"question": "How do you score in Asteroids?"},
+            )
+
+        assert response.status_code == 200
+        assert response.json()["answer"] == "Large asteroids are worth 20 points [1]."
 
     def test_request_max_steps_is_honoured(self) -> None:
         search_result = _make_search_result()

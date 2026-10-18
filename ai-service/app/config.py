@@ -13,16 +13,28 @@ class Settings(BaseSettings):
     )
 
     # LLM and Embeddings
-    llm_provider: Literal["gemini", "openai"] = "gemini"
+    llm_provider: Literal["gemini", "openai", "groq"] = "gemini"
     llm_model: str = "gemini-1.5-flash"
-    embedding_provider: Literal["gemini", "openai"] = "gemini"
+    embedding_provider: Literal["gemini", "openai", "fastembed"] = "gemini"
     embedding_model: str = "text-embedding-004"
     google_api_key: str = ""
     openai_api_key: str = ""
+    #: Groq API key (https://console.groq.com/keys) — required when
+    #: ``llm_provider == "groq"``.  Not an embeddings provider.
+    groq_api_key: str = ""
+    #: Local ONNX embeddings via fastembed — no API key required.
+    #: ``BAAI/bge-small-en-v1.5`` produces 384-dimensional vectors.
+    fastembed_model: str = "BAAI/bge-small-en-v1.5"
+    fastembed_cache_dir: str = "/data/fastembed_cache"
 
     # Vector Database
     qdrant_url: str = "http://qdrant:6333"
     qdrant_collection: str = "retro_games"
+    #: Dimensionality of the dense vectors — must match the embedding model
+    #: (Gemini text-embedding-004 = 768, OpenAI text-embedding-3-small =
+    #: 1536, fastembed BAAI/bge-small-en-v1.5 = 384).  Ingestion derives the
+    #: size from the model when it is known and falls back to this value.
+    vector_size: int = 768
 
     # Retrieval
     chunk_size: int = 800

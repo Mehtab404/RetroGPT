@@ -4,6 +4,7 @@ from app.ingestion.chunker import Chunk, RecursiveCharacterTextSplitter
 from app.ingestion.embeddings import (
     EmbeddingError,
     EmbeddingProvider,
+    FastEmbedEmbedding,
     GeminiEmbedding,
     OpenAIEmbedding,
     get_embedding_provider,
@@ -25,6 +26,7 @@ __all__ = [
     "EmbeddingError",
     "GeminiEmbedding",
     "OpenAIEmbedding",
+    "FastEmbedEmbedding",
     "get_embedding_provider",
     # Pipeline
     "IngestionPipeline",

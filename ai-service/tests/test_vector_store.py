@@ -215,8 +215,15 @@ class TestEnsureCollection:
 # ===========================================================================
 
 
-def _make_collection_info(sparse_names: list[str] | None = None) -> MagicMock:
-    """Build a mock CollectionInfo whose sparse_vectors section is configurable."""
+def _make_collection_info(
+    sparse_names: list[str] | None = None, dense_size: int | None = None
+) -> MagicMock:
+    """Build a mock CollectionInfo with configurable sparse/dense sections.
+
+    When *dense_size* is ``None`` the ``vectors`` attribute stays an
+    unconfigured ``MagicMock`` and the dense-size check is a no-op (matching
+    pre-existing tests); pass an ``int`` to exercise the check.
+    """
     info = MagicMock()
     if sparse_names:
         info.config.params.sparse_vectors = {
@@ -224,6 +231,11 @@ def _make_collection_info(sparse_names: list[str] | None = None) -> MagicMock:
         }
     else:
         info.config.params.sparse_vectors = None
+    if dense_size is not None:
+        info.config.params.vectors = qdrant_models.VectorParams(
+            size=dense_size,
+            distance=qdrant_models.Distance.COSINE,
+        )
     return info
 
 
@@ -280,16 +292,72 @@ class TestEnsureCollectionSparse:
         assert store.supports_sparse() is True
 
     @pytest.mark.asyncio
-    async def test_no_collection_probe_when_hybrid_disabled(self):
+    async def test_hybrid_disabled_probes_only_dense_dim(self):
+        """With hybrid disabled the existing collection is probed only to
+        verify the dense-vector size; no sparse machinery or recreation."""
         with patch("app.retrieval.vector_store.settings") as mock_settings:
             mock_settings.hybrid_search_enabled = False
             mock_settings.qdrant_url = "http://qdrant:6333"
             mock_settings.qdrant_collection = "retro_games"
+            mock_settings.vector_size = 768
             client = _make_mock_client(collections=["retro_games"])
+            client.get_collection.return_value = _make_collection_info(dense_size=768)
             store = QdrantVectorStore(client=client, collection="retro_games")
             await store.ensure_collection()
-        client.get_collection.assert_not_called()
+        client.get_collection.assert_called_once()
         client.create_collection.assert_not_called()
+        client.delete_collection.assert_not_called()
+
+
+class TestEnsureCollectionDenseDim:
+    """Dense-vector size verification: switching embedding providers must
+    never mix incompatible vectors silently."""
+
+    @pytest.mark.asyncio
+    async def test_matching_dense_dim_is_untouched(self):
+        client = _make_mock_client(collections=["retro_games"])
+        client.get_collection.return_value = _make_collection_info(
+            [SPARSE_VECTOR_NAME], dense_size=768
+        )
+        store = QdrantVectorStore(client=client, collection="retro_games", vector_size=768)
+        await store.ensure_collection()
+        client.create_collection.assert_not_called()
+        client.delete_collection.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_mismatched_dense_dim_raises_clear_error(self):
+        client = _make_mock_client(collections=["retro_games"])
+        client.get_collection.return_value = _make_collection_info(
+            [SPARSE_VECTOR_NAME], dense_size=768
+        )
+        store = QdrantVectorStore(client=client, collection="retro_games", vector_size=384)
+        with pytest.raises(VectorStoreError, match="768-dimensional"):
+            await store.ensure_collection()
+        client.create_collection.assert_not_called()
+        client.delete_collection.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_mismatched_dense_dim_recreated_on_request(self):
+        client = _make_mock_client(collections=["retro_games"])
+        client.get_collection.return_value = _make_collection_info(dense_size=768)
+        store = QdrantVectorStore(client=client, collection="retro_games", vector_size=384)
+        await store.ensure_collection(recreate_if_incompatible=True)
+        client.delete_collection.assert_called_once_with("retro_games")
+        client.create_collection.assert_called_once()
+        kwargs = client.create_collection.call_args[1]
+        assert kwargs["vectors_config"].size == 384
+
+    @pytest.mark.asyncio
+    async def test_named_vectors_config_is_checked(self):
+        client = _make_mock_client(collections=["retro_games"])
+        info = _make_collection_info([SPARSE_VECTOR_NAME])
+        info.config.params.vectors = {
+            "": qdrant_models.VectorParams(size=1536, distance=qdrant_models.Distance.COSINE)
+        }
+        client.get_collection.return_value = info
+        store = QdrantVectorStore(client=client, collection="retro_games", vector_size=384)
+        with pytest.raises(VectorStoreError, match="1536-dimensional"):
+            await store.ensure_collection()
 
 
 class TestSupportsSparse:
@@ -1263,6 +1331,21 @@ class TestCLIArgumentParsing:
         parser = _build_parser()
         args = parser.parse_args([str(tmp_path), "--embedding-provider", "openai"])
         assert args.embedding_provider == "openai"
+
+    @pytest.mark.parametrize("provider", ["gemini", "openai", "fastembed"])
+    def test_embedding_provider_choices(self, tmp_path: Path, provider: str):
+        from scripts.ingest import _build_parser
+
+        parser = _build_parser()
+        args = parser.parse_args([str(tmp_path), "--embedding-provider", provider])
+        assert args.embedding_provider == provider
+
+    def test_vector_size_option(self, tmp_path: Path):
+        from scripts.ingest import _build_parser
+
+        parser = _build_parser()
+        args = parser.parse_args([str(tmp_path), "--vector-size", "384"])
+        assert args.vector_size == 384
 
     def test_chunk_size_option(self, tmp_path: Path):
         from scripts.ingest import _build_parser

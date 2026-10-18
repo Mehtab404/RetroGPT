@@ -7,6 +7,7 @@ Covers:
   chunk, non-retryable errors.
 - ``OpenAILLM.generate_stream``: delta parsing, ``[DONE]`` handling,
   non-retryable errors.
+- ``GroqLLM.generate_stream``: delta parsing against the Groq endpoint.
 - ``POST /query/stream``: ``meta`` / ``token`` / ``done`` ordering, source
   metadata, no-context path, pre-stream HTTP errors (502/503), mid-stream
   ``error`` events, and structured ``query`` logging (``streamed=True``,
@@ -26,7 +27,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from app.generation.llm import GeminiLLM, LLMError, LLMProvider, OpenAILLM
+from app.generation.llm import GeminiLLM, GroqLLM, LLMError, LLMProvider, OpenAILLM
 from app.ingestion.embeddings import EmbeddingError
 from app.logging_config import JsonFormatter
 from app.main import app
@@ -282,6 +283,35 @@ class TestOpenAIStream:
                 [chunk async for chunk in provider.generate_stream("prompt")]
 
         assert client_mock.stream.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Groq streaming
+# ---------------------------------------------------------------------------
+
+
+class TestGroqStream:
+    async def test_streams_deltas_and_stops_at_done(self) -> None:
+        lines = [
+            'data: {"choices":[{"delta":{"content":"Hello"}}]}',
+            "",
+            'data: {"choices":[{"delta":{"content":" world"}}]}',
+            "",
+            'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+            "data: [DONE]",
+        ]
+        client_mock = _mock_client([_stream_context(_stream_response(lines))])
+        provider = GroqLLM(model="openai/gpt-oss-120b", api_key="test-key", max_retries=0)
+
+        with patch("httpx.AsyncClient", return_value=client_mock):
+            chunks = [chunk async for chunk in provider.generate_stream("prompt")]
+
+        assert chunks == ["Hello", " world"]
+        args, kwargs = client_mock.stream.call_args
+        assert args[0] == "POST"
+        assert args[1] == "https://api.groq.com/openai/v1/chat/completions"
+        assert kwargs["json"]["stream"] is True
+        assert kwargs["json"]["max_completion_tokens"] == 1024
 
 
 # ---------------------------------------------------------------------------

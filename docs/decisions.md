@@ -247,3 +247,30 @@ Backlog item #30 (stretch) asks for an *agent mode*: the model should decide wha
 - The neutral transcript is the new contract; adding a provider or a tool is additive, and tools must go through the registry to preserve citation/source invariants.
 - Latency is strictly higher than `/query`: each tool round-trip adds a retrieval plus one model call (bounded at `max_steps` turns plus the final answer). `_log_agent` emits `tools_used`, `steps` and per-stage timings per request.
 - Live routing quality (≥ 8/10) and fallback answer quality still need a credentialed run; the offline harness makes that a one-command follow-up when a key is available.
+
+---
+
+## ADR 0010: Groq as an OpenAI-Compatible LLM Provider and Key-Free Local Embeddings
+
+- **Status:** Accepted
+- **Date:** 2026-10-18
+- **Issue:** owner request (provider portability)
+
+### Context
+The owner plans to run RetroGPT on the Groq API (`https://api.groq.com/openai/v1`) instead of Gemini/OpenAI. Groq serves open-weight text models behind an OpenAI-compatible REST API — `chat/completions` with streaming (SSE + `[DONE]`), function calling with the same `tools` / `tool_calls` / `role: tool` message shapes, and Bearer auth — so the existing hand-rolled `httpx` provider layer needs no new dependency and no protocol work. Two concrete differences matter: Groq deprecates `max_tokens` in favour of `max_completion_tokens`, and it rejects the optional `messages[].name` field. Separately, Groq does not offer an embeddings API, and the credentialed-eval backlog (ADR 0002–0004, README metrics) has been blocked on key availability; embeddings are the one layer that cannot move to Groq.
+
+### Decision
+1. **Groq is a first-class provider via configuration.** `LLM_PROVIDER=groq` + `GROQ_API_KEY` + `LLM_MODEL` (e.g. `openai/gpt-oss-120b`) selects it; Gemini stays the default. `GroqLLM` subclasses `OpenAILLM`; the parent gained a `base_url` parameter, a `_TOKEN_LIMIT_FIELD` class attribute and a `_PROVIDER_LABEL` used in error messages, so payload, streaming and tool-calling logic are shared and each vendor divergence is a small override. The provider-neutral agent transcript is untouched — the OpenAI translation already omits `messages[].name`.
+2. **Embeddings gain a local fastembed option instead of a Groq one.** `EMBEDDING_PROVIDER=fastembed` runs `BAAI/bge-small-en-v1.5` (384-dim) on CPU through the fastembed/ONNX stack already shipped for the cross-encoder re-ranker — no API key, no second hosted vendor. The provider contract is unchanged (`embed_documents` / `embed_query`, async via `asyncio.to_thread`); Gemini and OpenAI embeddings remain available and unchanged.
+3. **Collection sizing becomes explicit and mostly automatic.** Settings gain `VECTOR_SIZE` (default 768); the ingestion CLI derives the dense-vector size from a small known-model registry (`embedding.dimension`) when possible, accepts `--vector-size` as an explicit override, and falls back to `VECTOR_SIZE`. `ensure_collection` verifies the stored dense-vector size and raises a clear `VectorStoreError` on mismatch (unless the caller explicitly opts into recreation), so switching embedding models can never mix incompatible vectors silently; doing so means re-ingesting into a fresh collection, which the README now states.
+4. **Tests never touch the network.** Groq providers are covered with mocked `httpx` (base URL, Bearer key from settings, `max_completion_tokens` payload, streaming deltas + `[DONE]`, tool-call round-trip without `name`); fastembed is covered with an injected stub model, so CI downloads nothing and spends no credits.
+
+### Consequences
+- The stack runs end-to-end on Groq + local embeddings with a single free-tier-or-paid key, unblocking the credentialed eval and load-test numbers that ADR 0002–0004 left pending.
+- Cost is negligible: `openai/gpt-oss-120b` is $0.15/$0.60 per M tokens, so the full eval + load-test validation suite is a few cents; the free tier (8 K TPM binding, ~200 K TPD documented — see ADR 0011) still covers light runs.
+- The OpenAI-compatible seam is now a documented extension point: any further OpenAI-compatible vendor is a small subclass, and `_TOKEN_LIMIT_FIELD` / `_PROVIDER_LABEL` capture the known divergences.
+- `fastembed` embeddings are English-centric and CPU-bound; for multilingual corpora or hosted quality, `EMBEDDING_PROVIDER=gemini`/`openai` remain one env var away (with a re-ingest and matching `VECTOR_SIZE`).
+- Groq's gpt-oss models do not support parallel tool calls; the agent loop already copes with one call per turn, so routing behaviour is unaffected.
+
+---
+

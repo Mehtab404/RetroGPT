@@ -80,7 +80,8 @@ docker compose version            # plugin ships with the script above
 ```bash
 git clone <repo-url> /opt/retrogpt && cd /opt/retrogpt
 cp .env.production.example .env.production
-# Fill in DOMAIN/PUBLIC_ORIGIN, ECR_REGISTRY, API_KEY, GOOGLE_API_KEY,
+# Fill in DOMAIN/PUBLIC_ORIGIN, ECR_REGISTRY, API_KEY, GOOGLE_API_KEY
+# (or GROQ_API_KEY / OPENAI_API_KEY for other providers),
 # REDIS_PASSWORD, MONGO_PASSWORD. Keep the raw game documents in ./data.
 ```
 
@@ -145,7 +146,8 @@ docker compose --env-file .env.production -f docker-compose.prod.yml \
 ```
 
 This writes vectors to Qdrant and BM25 statistics to `./data/bm25_stats.json`
-on the host. Requires a valid `GOOGLE_API_KEY` (embeddings).
+on the host. Requires a valid embedding path: `GOOGLE_API_KEY` (default),
+`OPENAI_API_KEY`, or `EMBEDDING_PROVIDER=fastembed` (local ONNX, no key).
 
 ---
 

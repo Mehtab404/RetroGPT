@@ -4,6 +4,7 @@ Covers:
 - EmbeddingProvider ABC contract
 - GeminiEmbedding: embed_documents, embed_query, batching, retry logic
 - OpenAIEmbedding: embed_documents, embed_query, batching, retry logic
+- FastEmbedEmbedding: local ONNX embeddings via an injected stub model
 - get_embedding_provider factory
 - EmbeddingError raised on bad response shapes
 - Exponential backoff: correct sleep durations, retry counts
@@ -25,6 +26,7 @@ from app.ingestion.embeddings import (
     _RETRYABLE_STATUS_CODES,
     EmbeddingError,
     EmbeddingProvider,
+    FastEmbedEmbedding,
     GeminiEmbedding,
     OpenAIEmbedding,
     get_embedding_provider,
@@ -764,6 +766,91 @@ class TestOpenAIEmbeddingRetry:
 
 
 # ---------------------------------------------------------------------------
+# FastEmbedEmbedding (local ONNX, no API key)
+# ---------------------------------------------------------------------------
+
+
+class _FakeTextEmbedding:
+    """Stub ``fastembed.TextEmbedding`` returning deterministic vectors."""
+
+    def __init__(self) -> None:
+        self.embed_calls: list[list[str]] = []
+        self.query_calls: list[list[str]] = []
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        self.embed_calls.append(list(texts))
+        return [[float(len(text)), 1.0, 0.0] for text in texts]
+
+    def query_embed(self, texts: list[str]) -> list[list[float]]:
+        self.query_calls.append(list(texts))
+        return [[0.0, 0.0, float(len(texts[0]))]]
+
+
+class TestFastEmbedEmbedding:
+    """Tests for local fastembed embeddings (no HTTP, no API key)."""
+
+    @pytest.mark.asyncio
+    async def test_embed_documents_returns_float_vectors(self):
+        fake = _FakeTextEmbedding()
+        provider = FastEmbedEmbedding(text_embedding=fake)
+
+        vectors = await provider.embed_documents(["ab", "cde"])
+
+        assert vectors == [[2.0, 1.0, 0.0], [3.0, 1.0, 0.0]]
+        assert fake.embed_calls == [["ab", "cde"]]
+
+    @pytest.mark.asyncio
+    async def test_embed_query_uses_query_embed(self):
+        fake = _FakeTextEmbedding()
+        provider = FastEmbedEmbedding(text_embedding=fake)
+
+        vector = await provider.embed_query("scoring")
+
+        assert vector == [0.0, 0.0, 7.0]
+        assert fake.query_calls == [["scoring"]]
+
+    @pytest.mark.asyncio
+    async def test_embed_documents_empty_input_returns_empty(self):
+        fake = _FakeTextEmbedding()
+        provider = FastEmbedEmbedding(text_embedding=fake)
+
+        assert await provider.embed_documents([]) == []
+        assert fake.embed_calls == []
+
+    @pytest.mark.asyncio
+    async def test_inference_error_wrapped_in_embedding_error(self):
+        class _Boom:
+            def embed(self, texts):
+                raise RuntimeError("onnx exploded")
+
+        provider = FastEmbedEmbedding(text_embedding=_Boom())
+
+        with pytest.raises(EmbeddingError, match="fastembed inference failed"):
+            await provider.embed_documents(["x"])
+
+    def test_default_model_from_settings(self):
+        with patch("app.ingestion.embeddings.settings") as mock_settings:
+            mock_settings.fastembed_model = "BAAI/bge-small-en-v1.5"
+            mock_settings.fastembed_cache_dir = "/data/fastembed_cache"
+            provider = FastEmbedEmbedding(text_embedding=_FakeTextEmbedding())
+        assert provider.model == "BAAI/bge-small-en-v1.5"
+
+    def test_known_model_dimension(self):
+        provider = FastEmbedEmbedding(
+            model="BAAI/bge-small-en-v1.5", text_embedding=_FakeTextEmbedding()
+        )
+        assert provider.dimension == 384
+
+    def test_unknown_model_dimension_is_none(self):
+        provider = FastEmbedEmbedding(model="custom/model", text_embedding=_FakeTextEmbedding())
+        assert provider.dimension is None
+
+    def test_gemini_and_openai_known_dimensions(self):
+        assert GeminiEmbedding(model="text-embedding-004").dimension == 768
+        assert OpenAIEmbedding(model="text-embedding-3-small").dimension == 1536
+
+
+# ---------------------------------------------------------------------------
 # get_embedding_provider factory
 # ---------------------------------------------------------------------------
 
@@ -778,6 +865,10 @@ class TestGetEmbeddingProvider:
     def test_returns_openai_for_openai_string(self):
         provider = get_embedding_provider("openai")
         assert isinstance(provider, OpenAIEmbedding)
+
+    def test_returns_fastembed_for_fastembed_string(self):
+        provider = get_embedding_provider("fastembed")
+        assert isinstance(provider, FastEmbedEmbedding)
 
     def test_case_insensitive(self):
         assert isinstance(get_embedding_provider("Gemini"), GeminiEmbedding)

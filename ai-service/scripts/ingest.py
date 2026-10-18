@@ -91,9 +91,22 @@ def _build_parser() -> argparse.ArgumentParser:
         "--embedding-provider",
         type=str,
         default=None,
-        choices=["gemini", "openai"],
+        choices=["gemini", "openai", "fastembed"],
         metavar="PROVIDER",
-        help="Embedding provider to use: 'gemini' or 'openai' (default: from settings).",
+        help=(
+            "Embedding provider to use: 'gemini', 'openai' or 'fastembed' "
+            "(default: from settings)."
+        ),
+    )
+    parser.add_argument(
+        "--vector-size",
+        type=int,
+        default=None,
+        metavar="DIM",
+        help=(
+            "Dense-vector dimensionality for new collections (default: derived "
+            "from the embedding model when known, else from VECTOR_SIZE/settings)."
+        ),
     )
     parser.add_argument(
         "--chunk-size",
@@ -200,21 +213,35 @@ async def _run_ingestion(source: Path, args: argparse.Namespace) -> int:
     Returns:
         Exit code: 0 = success, 1 = partial errors, 2 = fatal error.
     """
+    from app.config import settings
     from app.ingestion.chunker import RecursiveCharacterTextSplitter
     from app.ingestion.embeddings import get_embedding_provider
     from app.ingestion.pipeline import IngestionPipeline
     from app.retrieval.vector_store import QdrantVectorStore, VectorStoreError
 
+    # Build the embedder first so the collection can be sized to match it.
+    provider_name: str | None = args.embedding_provider
+    embedder = get_embedding_provider(provider_name)
+
+    # Explicit --vector-size wins; otherwise derive from the model when it is
+    # in the built-in registry, falling back to VECTOR_SIZE / settings.
+    vector_size = args.vector_size or embedder.dimension
+    if vector_size is None:
+        vector_size = settings.vector_size
+        logger.warning(
+            "Unknown dimensionality for embedding model '%s'; using "
+            "VECTOR_SIZE=%d. Pass --vector-size if the model differs.",
+            embedder.model,
+            vector_size,
+        )
+
     # Build component overrides from CLI args.
-    store_kwargs: dict[str, str] = {}
+    store_kwargs: dict[str, object] = {"vector_size": vector_size}
     if args.qdrant_url:
         store_kwargs["url"] = args.qdrant_url
     if args.collection:
         store_kwargs["collection"] = args.collection
     store = QdrantVectorStore(**store_kwargs)  # type: ignore[arg-type]
-
-    provider_name: str | None = args.embedding_provider
-    embedder = get_embedding_provider(provider_name)
 
     chunk_kwargs: dict[str, int] = {}
     if args.chunk_size:

@@ -140,8 +140,9 @@ class QdrantVectorStore:
         vector_size:    Dimensionality of the embedding vectors.  Must
                         match the embedding model (Gemini ``text-embedding-004``
                         produces 768-dimensional vectors; OpenAI
-                        ``text-embedding-3-small`` produces 1536).
-                        Defaults to 768.
+                        ``text-embedding-3-small`` produces 1536; fastembed
+                        ``BAAI/bge-small-en-v1.5`` produces 384).
+                        Defaults to ``settings.vector_size`` (768).
         upsert_batch:   Number of points per Qdrant upsert request.
                         Defaults to 100.
         client:         Optional pre-constructed :class:`QdrantClient`.
@@ -159,13 +160,13 @@ class QdrantVectorStore:
         self,
         url: str | None = None,
         collection: str | None = None,
-        vector_size: int = 768,
+        vector_size: int | None = None,
         upsert_batch: int = _UPSERT_BATCH_SIZE,
         client: QdrantClient | None = None,
     ) -> None:
         self._url = url or settings.qdrant_url
         self.collection = collection or settings.qdrant_collection
-        self.vector_size = vector_size
+        self.vector_size = vector_size if vector_size is not None else settings.vector_size
         self.upsert_batch = upsert_batch
         # Allow injecting a pre-built client (useful for testing).
         self._client: QdrantClient = client or QdrantClient(url=self._url)
@@ -190,6 +191,12 @@ class QdrantVectorStore:
 
         If the collection already exists:
 
+        * with a different dense-vector size than ``self.vector_size`` (for
+          example after switching ``EMBEDDING_PROVIDER``) → a
+          :class:`VectorStoreError` is raised so vectors from different
+          embedding models can never be mixed silently, unless
+          *recreate_if_incompatible* is true, in which case the collection is
+          deleted and re-created;
         * with a sparse config → no-op;
         * without a sparse config but hybrid search is enabled → a warning is
           logged (retrieval will fall back to dense) unless
@@ -199,10 +206,13 @@ class QdrantVectorStore:
 
         Args:
             recreate_if_incompatible: Whether to drop and re-create an
-                existing collection that lacks the sparse-vector config.
+                existing collection whose dense-vector size or sparse-vector
+                configuration does not match.
 
         Raises:
-            VectorStoreError: If Qdrant returns an unexpected error.
+            VectorStoreError: If Qdrant returns an unexpected error, or if
+                the existing collection stores vectors of a different size
+                than ``self.vector_size``.
         """
         try:
             exists = await asyncio.to_thread(self._collection_exists)
@@ -215,6 +225,29 @@ class QdrantVectorStore:
                     settings.hybrid_search_enabled,
                 )
                 return
+
+            stored_size = await asyncio.to_thread(self._collection_dense_size)
+            if stored_size is not None and stored_size != self.vector_size:
+                if recreate_if_incompatible:
+                    logger.warning(
+                        "Recreating collection '%s': stored vectors are "
+                        "%d-dimensional but the configured embedding model "
+                        "produces %d; existing points are dropped "
+                        "(re-ingest afterwards).",
+                        self.collection,
+                        stored_size,
+                        self.vector_size,
+                    )
+                    await asyncio.to_thread(self._client.delete_collection, self.collection)
+                    await asyncio.to_thread(self._create_collection)
+                    return
+                raise VectorStoreError(
+                    f"Collection '{self.collection}' stores {stored_size}-dimensional "
+                    "vectors, but the configured embedding model produces "
+                    f"{self.vector_size}-dimensional vectors. Point "
+                    "EMBEDDING_PROVIDER/VECTOR_SIZE at the model the collection was "
+                    "built with, or ingest into a fresh QDRANT_COLLECTION."
+                )
 
             if not settings.hybrid_search_enabled:
                 logger.debug("Collection '%s' already exists.", self.collection)
@@ -264,6 +297,21 @@ class QdrantVectorStore:
         sparse_vectors = getattr(info.config.params, "sparse_vectors", None)
         self._sparse_supported = bool(sparse_vectors)
         return self._sparse_supported
+
+    def _collection_dense_size(self) -> int | None:
+        """Return the dense-vector size of the existing collection, if known.
+
+        Handles both the default unnamed vector config and named-vector
+        configs (first entry); returns ``None`` when no integer size can be
+        read from the config, so unusual external setups do not block
+        ingestion.
+        """
+        info = self._client.get_collection(self.collection)
+        vectors = getattr(info.config.params, "vectors", None)
+        if isinstance(vectors, dict):
+            vectors = next(iter(vectors.values()), None)
+        size = getattr(vectors, "size", None)
+        return size if isinstance(size, int) else None
 
     def _create_collection(self) -> None:
         """Create the Qdrant collection (blocking call)."""

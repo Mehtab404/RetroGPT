@@ -3,16 +3,19 @@
 Provides a uniform :class:`EmbeddingProvider` interface for producing
 dense vector embeddings from text, with concrete implementations for:
 
-* :class:`GeminiEmbedding`  — Google Generative AI ``text-embedding-004``
-* :class:`OpenAIEmbedding`  — OpenAI ``text-embedding-3-small`` (or any model)
+* :class:`GeminiEmbedding`    — Google Generative AI ``text-embedding-004``
+* :class:`OpenAIEmbedding`    — OpenAI ``text-embedding-3-small`` (or any model)
+* :class:`FastEmbedEmbedding` — local ONNX embeddings via ``fastembed``
+  (no API key required)
 
-Both implementations support:
+All implementations support:
 
 * **Batching** — large lists of texts are split into provider-appropriate
   batches before being sent, reducing per-call overhead.
 * **Retry with exponential backoff** — transient HTTP errors (429, 5xx) and
   network timeouts are retried up to *max_retries* times, doubling the wait
-  time on each attempt, with optional jitter.
+  time on each attempt, with optional jitter.  (Local fastembed inference
+  needs no retries; the arguments are accepted for interface uniformity.)
 
 Typical usage::
 
@@ -22,7 +25,8 @@ Typical usage::
     vectors = await provider.embed_documents(["Hello world", "Asteroids!"])
     query_vec = await provider.embed_query("How do I score?")
 
-All provider methods are ``async`` and use ``httpx.AsyncClient`` internally.
+The HTTP providers use ``httpx.AsyncClient`` internally; the fastembed
+provider runs locally through ONNX Runtime.
 """
 
 from __future__ import annotations
@@ -32,6 +36,7 @@ import logging
 import random
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
+from typing import Any
 
 import httpx
 
@@ -52,6 +57,23 @@ _DEFAULT_TIMEOUT: float = 30.0
 
 # HTTP status codes considered transiently retryable.
 _RETRYABLE_STATUS_CODES: frozenset[int] = frozenset({408, 429, 500, 502, 503, 504})
+
+#: Known output dimensionalities for common embedding models.  Used to size
+#: the Qdrant collection automatically at ingestion time; for unknown models
+#: callers fall back to ``settings.vector_size``.
+_KNOWN_EMBEDDING_DIMS: dict[str, int] = {
+    # Gemini
+    "text-embedding-004": 768,
+    "gemini-embedding-001": 3072,
+    # OpenAI
+    "text-embedding-3-small": 1536,
+    "text-embedding-3-large": 3072,
+    "text-embedding-ada-002": 1536,
+    # fastembed (local ONNX)
+    "BAAI/bge-small-en-v1.5": 384,
+    "BAAI/bge-base-en-v1.5": 768,
+    "sentence-transformers/all-MiniLM-L6-v2": 384,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +111,15 @@ class EmbeddingProvider(ABC):
         self.base_delay = base_delay
         self.jitter = jitter
         self.timeout = timeout
+
+    @property
+    def dimension(self) -> int | None:
+        """Output dimensionality of the model, when known.
+
+        Returns ``None`` for models outside the built-in registry; callers
+        should then fall back to ``settings.vector_size``.
+        """
+        return _KNOWN_EMBEDDING_DIMS.get(self.model)
 
     # ------------------------------------------------------------------
     # Public interface
@@ -502,6 +533,139 @@ class OpenAIEmbedding(EmbeddingProvider):
 
 
 # ---------------------------------------------------------------------------
+# fastembed implementation (local ONNX, no API key)
+# ---------------------------------------------------------------------------
+
+
+class FastEmbedEmbedding(EmbeddingProvider):
+    """Local ONNX embeddings via ``fastembed`` — no API key required.
+
+    Runs on CPU through the same ONNX Runtime stack as the cross-encoder
+    re-ranker, so a Groq/OpenAI-style deployment needs no second hosted
+    provider for embeddings.  The model is downloaded on first use and
+    cached under *cache_dir* (mount ``/data`` in Docker to persist it).
+
+    Args:
+        model:          fastembed model id. Defaults to
+                        ``settings.fastembed_model``
+                        (``"BAAI/bge-small-en-v1.5"``, 384 dimensions).
+        cache_dir:      Model download cache directory. Defaults to
+                        ``settings.fastembed_cache_dir``.
+        text_embedding: Optional pre-built ``fastembed.TextEmbedding``
+                        instance (tests inject a stub to avoid downloads).
+        max_retries:    Accepted for interface uniformity; local inference
+                        has no HTTP calls to retry.
+        base_delay:     Accepted for interface uniformity (unused).
+        jitter:         Accepted for interface uniformity (unused).
+        timeout:        Accepted for interface uniformity (unused).
+
+    Example::
+
+        provider = FastEmbedEmbedding()
+        vecs = await provider.embed_documents(["Pong rules", "Asteroids FAQ"])
+    """
+
+    def __init__(
+        self,
+        model: str | None = None,
+        cache_dir: str | None = None,
+        text_embedding: Any | None = None,
+        max_retries: int = 3,
+        base_delay: float = 1.0,
+        jitter: bool = True,
+        timeout: float = _DEFAULT_TIMEOUT,
+    ) -> None:
+        resolved_model = model or settings.fastembed_model
+        super().__init__(
+            model=resolved_model,
+            max_retries=max_retries,
+            base_delay=base_delay,
+            jitter=jitter,
+            timeout=timeout,
+        )
+        self._cache_dir = cache_dir or settings.fastembed_cache_dir
+        self._text_embedding = text_embedding
+
+    # ------------------------------------------------------------------
+    # Public interface
+    # ------------------------------------------------------------------
+
+    async def embed_documents(self, texts: Sequence[str]) -> list[list[float]]:
+        """Embed document texts locally.
+
+        Args:
+            texts: Sequence of document strings to embed.
+
+        Returns:
+            List of float vectors, one per input text.
+
+        Raises:
+            EmbeddingError: If the model cannot be loaded or inference fails.
+        """
+        if not texts:
+            return []
+        return await asyncio.to_thread(self._embed_sync, list(texts), False)
+
+    async def embed_query(self, text: str) -> list[float]:
+        """Embed a single query string locally.
+
+        Uses fastembed's ``query_embed`` so models that rely on an
+        asymmetric query prefix (the bge family) encode correctly.
+
+        Args:
+            text: Query to embed.
+
+        Returns:
+            Float vector for the query.
+
+        Raises:
+            EmbeddingError: If the model cannot be loaded or inference fails.
+        """
+        vectors = await asyncio.to_thread(self._embed_sync, [text], True)
+        return vectors[0]
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _load_model(self) -> Any:
+        """Load the fastembed model lazily on first use."""
+        if self._text_embedding is None:
+            try:
+                from fastembed import TextEmbedding
+            except ImportError as exc:  # pragma: no cover - dependency is pinned
+                raise EmbeddingError(
+                    "The 'fastembed' package is not installed; install the "
+                    "ai-service requirements or choose another EMBEDDING_PROVIDER."
+                ) from exc
+            try:
+                self._text_embedding = TextEmbedding(
+                    model_name=self.model, cache_dir=self._cache_dir
+                )
+            except Exception as exc:
+                raise EmbeddingError(
+                    f"Could not load fastembed model '{self.model}': {exc}"
+                ) from exc
+            logger.info(
+                "Loaded fastembed model '%s' (cache: %s).",
+                self.model,
+                self._cache_dir,
+            )
+        return self._text_embedding
+
+    def _embed_sync(self, texts: list[str], is_query: bool) -> list[list[float]]:
+        """Run one synchronous fastembed batch and return plain float lists."""
+        model = self._load_model()
+        embed_fn = model.query_embed if is_query else model.embed
+        try:
+            return [[float(value) for value in vector] for vector in embed_fn(texts)]
+        except EmbeddingError:
+            raise
+        except Exception as exc:
+            raise EmbeddingError(f"fastembed inference failed: {exc}") from exc
+
+
+# ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
 
@@ -515,15 +679,16 @@ def get_embedding_provider(
     The *provider* argument (or ``settings.embedding_provider`` if omitted)
     selects the implementation:
 
-    * ``"gemini"``  → :class:`GeminiEmbedding`
-    * ``"openai"``  → :class:`OpenAIEmbedding`
+    * ``"gemini"``    → :class:`GeminiEmbedding`
+    * ``"openai"``    → :class:`OpenAIEmbedding`
+    * ``"fastembed"`` → :class:`FastEmbedEmbedding` (local ONNX, no API key)
 
     Any extra *kwargs* are forwarded to the provider constructor (e.g.
     ``model``, ``batch_size``, ``max_retries``).
 
     Args:
-        provider: Provider identifier (``"gemini"`` or ``"openai"``).
-                  Defaults to ``settings.embedding_provider``.
+        provider: Provider identifier (``"gemini"``, ``"openai"`` or
+                  ``"fastembed"``). Defaults to ``settings.embedding_provider``.
         **kwargs: Additional keyword arguments passed to the provider.
 
     Returns:
@@ -543,6 +708,9 @@ def get_embedding_provider(
         return GeminiEmbedding(**kwargs)  # type: ignore[arg-type]
     if resolved == "openai":
         return OpenAIEmbedding(**kwargs)  # type: ignore[arg-type]
+    if resolved == "fastembed":
+        return FastEmbedEmbedding(**kwargs)  # type: ignore[arg-type]
     raise ValueError(
-        f"Unknown embedding provider '{resolved}'. " "Supported values: 'gemini', 'openai'."
+        f"Unknown embedding provider '{resolved}'. "
+        "Supported values: 'gemini', 'openai', 'fastembed'."
     )

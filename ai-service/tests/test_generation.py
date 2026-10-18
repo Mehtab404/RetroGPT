@@ -36,6 +36,7 @@ from pydantic import ValidationError
 
 from app.generation.llm import (
     GeminiLLM,
+    GroqLLM,
     LLMError,
     LLMProvider,
     OpenAILLM,
@@ -439,6 +440,116 @@ class TestOpenAILLMGenerate:
 
 
 # ---------------------------------------------------------------------------
+# GroqLLM (OpenAI-compatible provider)
+# ---------------------------------------------------------------------------
+
+
+class TestGroqLLMGenerate:
+    """Tests for GroqLLM.generate()."""
+
+    @pytest.mark.asyncio
+    async def test_generate_success(self) -> None:
+        """Successful Groq generation returns text."""
+        provider = GroqLLM(model="openai/gpt-oss-120b", api_key="gsk-test", jitter=False)
+        resp = _mock_httpx_response(_openai_ok_response("Asteroids scores 20 pts."))
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client.post = AsyncMock(return_value=resp)
+            mock_client_cls.return_value = mock_client
+
+            result = await provider.generate("How do you score in Asteroids?")
+
+        assert result == "Asteroids scores 20 pts."
+
+    @pytest.mark.asyncio
+    async def test_generate_calls_groq_base_url(self) -> None:
+        """Groq requests use the api.groq.com OpenAI-compatible endpoint."""
+        provider = GroqLLM(model="openai/gpt-oss-120b", api_key="gsk-test", jitter=False)
+        resp = _mock_httpx_response(_openai_ok_response("answer"))
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client.post = AsyncMock(return_value=resp)
+            mock_client_cls.return_value = mock_client
+
+            await provider.generate("q")
+
+        url = mock_client.post.call_args[0][0]
+        assert url == "https://api.groq.com/openai/v1/chat/completions"
+
+    @pytest.mark.asyncio
+    async def test_generate_uses_groq_api_key_from_settings(self) -> None:
+        """Bearer token comes from settings.groq_api_key when not passed in."""
+        with patch("app.generation.llm.settings") as mock_settings:
+            mock_settings.groq_api_key = "gsk-from-settings"
+            mock_settings.llm_model = "openai/gpt-oss-120b"
+            provider = GroqLLM(jitter=False)
+
+        resp = _mock_httpx_response(_openai_ok_response("answer"))
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client.post = AsyncMock(return_value=resp)
+            mock_client_cls.return_value = mock_client
+
+            await provider.generate("q")
+
+        headers = mock_client.post.call_args[1]["headers"]
+        assert headers["Authorization"] == "Bearer gsk-from-settings"
+
+    def test_model_defaults_to_settings_llm_model(self) -> None:
+        """LLM_MODEL is honoured when no model is passed explicitly."""
+        with patch("app.generation.llm.settings") as mock_settings:
+            mock_settings.groq_api_key = "key"
+            mock_settings.llm_model = "openai/gpt-oss-120b"
+            provider = GroqLLM()
+
+        assert provider.model == "openai/gpt-oss-120b"
+
+    @pytest.mark.asyncio
+    async def test_generate_sends_max_completion_tokens(self) -> None:
+        """Groq uses the newer max_completion_tokens field."""
+        provider = GroqLLM(model="openai/gpt-oss-120b", api_key="key", max_tokens=256, jitter=False)
+        resp = _mock_httpx_response(_openai_ok_response("answer"))
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client.post = AsyncMock(return_value=resp)
+            mock_client_cls.return_value = mock_client
+
+            await provider.generate("q")
+
+        payload = mock_client.post.call_args[1]["json"]
+        assert payload["max_completion_tokens"] == 256
+        assert "max_tokens" not in payload
+
+    @pytest.mark.asyncio
+    async def test_generate_malformed_response_raises_llm_error(self) -> None:
+        """LLMError raised if Groq returns an unexpected JSON structure."""
+        provider = GroqLLM(model="openai/gpt-oss-120b", api_key="key", jitter=False)
+        resp = _mock_httpx_response({"wrong": "structure"})
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client.post = AsyncMock(return_value=resp)
+            mock_client_cls.return_value = mock_client
+
+            with pytest.raises(LLMError, match="Unexpected Groq response"):
+                await provider.generate("q")
+
+
+# ---------------------------------------------------------------------------
 # get_llm_provider factory
 # ---------------------------------------------------------------------------
 
@@ -457,6 +568,14 @@ class TestGetLLMProvider:
             mock_settings.openai_api_key = "key"
             provider = get_llm_provider(provider="openai")
         assert isinstance(provider, OpenAILLM)
+
+    def test_returns_groq_when_specified(self) -> None:
+        with patch("app.generation.llm.settings") as mock_settings:
+            mock_settings.groq_api_key = "key"
+            mock_settings.llm_model = "openai/gpt-oss-120b"
+            provider = get_llm_provider(provider="groq")
+        assert isinstance(provider, GroqLLM)
+        assert provider.model == "openai/gpt-oss-120b"
 
     def test_raises_on_unknown_provider(self) -> None:
         with pytest.raises(ValueError, match="Unknown LLM provider"):
@@ -792,6 +911,31 @@ class TestQueryEndpointHappyPath:
         assert "latency_ms" in data
         assert data["latency_ms"] >= 0
         assert data["cached"] is False
+
+    def test_query_normalizes_full_width_citations(self) -> None:
+        search_result = _make_search_result(chunk_id="pacman_p3_c1")
+
+        with (
+            patch("app.main.get_embedding_provider") as mock_embed_factory,
+            patch("app.main.QdrantVectorStore") as mock_vs_cls,
+            patch("app.main.get_llm_provider") as mock_llm_factory,
+        ):
+            mock_embedder = AsyncMock()
+            mock_embedder.embed_query = AsyncMock(return_value=[0.1] * 768)
+            mock_embed_factory.return_value = mock_embedder
+
+            mock_vs = AsyncMock()
+            mock_vs.search = AsyncMock(return_value=[search_result])
+            mock_vs_cls.return_value = mock_vs
+
+            mock_llm = AsyncMock()
+            mock_llm.generate = AsyncMock(return_value="Points 【1】 and ［2］ and 【3].")
+            mock_llm_factory.return_value = mock_llm
+
+            response = client.post("/query", json={"question": "q?"})
+
+        assert response.status_code == 200
+        assert response.json()["answer"] == "Points [1] and [2] and [3]."
 
     def test_query_source_snippet_truncated_to_300_chars(self) -> None:
         long_content = "A" * 500

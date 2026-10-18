@@ -5,8 +5,9 @@ a prompt, with concrete implementations for:
 
 * :class:`GeminiLLM`  — Google Generative AI (``gemini-1.5-flash`` default)
 * :class:`OpenAILLM`  — OpenAI chat completions (``gpt-4o-mini`` default)
+* :class:`GroqLLM`    — Groq (OpenAI-compatible, ``settings.llm_model`` default)
 
-Both implementations support:
+All implementations support:
 
 * **Retry with exponential backoff** — transient HTTP errors (429, 5xx) and
   network timeouts are retried up to *max_retries* times.
@@ -53,6 +54,8 @@ _RETRYABLE_STATUS_CODES: frozenset[int] = frozenset({408, 429, 500, 502, 503, 50
 _GEMINI_BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta"
 # OpenAI REST API base URL
 _OPENAI_BASE_URL: str = "https://api.openai.com/v1"
+# Groq REST API base URL (OpenAI-compatible)
+_GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
 
 
 # ---------------------------------------------------------------------------
@@ -669,10 +672,16 @@ class OpenAILLM(LLMProvider):
     """OpenAI chat completion via REST API.
 
     Uses the ``/chat/completions`` endpoint with a single user message.
+    Subclasses that speak the same protocol (e.g. :class:`GroqLLM`) reuse
+    this implementation with a different ``base_url``, API key and token
+    limit parameter.
 
     Args:
         model:        OpenAI model name. Defaults to ``"gpt-4o-mini"``.
         api_key:      OpenAI API key. Defaults to ``settings.openai_api_key``.
+        base_url:     Chat-completions base URL. Defaults to the public
+                      OpenAI endpoint; override to target an OpenAI-compatible
+                      API (proxies, gateways).
         temperature:  Sampling temperature.
         max_tokens:   Maximum output tokens.
         max_retries:  Retry attempts for transient errors.
@@ -681,10 +690,17 @@ class OpenAILLM(LLMProvider):
         timeout:      HTTP timeout in seconds.
     """
 
+    #: Provider label used in error messages.
+    _PROVIDER_LABEL: str = "OpenAI"
+    #: Request field that caps the generated tokens.  Some OpenAI-compatible
+    #: APIs (Groq) require the newer ``max_completion_tokens`` name.
+    _TOKEN_LIMIT_FIELD: str = "max_tokens"
+
     def __init__(
         self,
         model: str = "gpt-4o-mini",
         api_key: str | None = None,
+        base_url: str = _OPENAI_BASE_URL,
         temperature: float = 0.2,
         max_tokens: int = 1024,
         max_retries: int = 3,
@@ -702,6 +718,7 @@ class OpenAILLM(LLMProvider):
             timeout=timeout,
         )
         self._api_key = api_key or settings.openai_api_key
+        self._base_url = base_url.rstrip("/")
 
     async def generate(self, prompt: str) -> str:
         """Generate text using the OpenAI chat completions API.
@@ -719,7 +736,7 @@ class OpenAILLM(LLMProvider):
 
     async def _call_api(self, prompt: str) -> str:
         """Make a single OpenAI API call (no retry logic here)."""
-        url = f"{_OPENAI_BASE_URL}/chat/completions"
+        url = f"{self._base_url}/chat/completions"
         headers = {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
@@ -728,7 +745,7 @@ class OpenAILLM(LLMProvider):
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
+            self._TOKEN_LIMIT_FIELD: self.max_tokens,
         }
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -739,7 +756,7 @@ class OpenAILLM(LLMProvider):
         try:
             return data["choices"][0]["message"]["content"]
         except (KeyError, IndexError) as exc:
-            raise LLMError(f"Unexpected OpenAI response structure: {data}") from exc
+            raise LLMError(f"Unexpected {self._PROVIDER_LABEL} response structure: {data}") from exc
 
     async def generate_with_tools(
         self,
@@ -760,7 +777,7 @@ class OpenAILLM(LLMProvider):
         tools: list[dict[str, Any]],
     ) -> AgentTurn:
         """Make a single OpenAI tool-calling call (no retry logic here)."""
-        url = f"{_OPENAI_BASE_URL}/chat/completions"
+        url = f"{self._base_url}/chat/completions"
         headers = {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
@@ -783,7 +800,7 @@ class OpenAILLM(LLMProvider):
                 for tool in tools
             ],
             "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
+            self._TOKEN_LIMIT_FIELD: self.max_tokens,
         }
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -794,7 +811,7 @@ class OpenAILLM(LLMProvider):
         try:
             message = data["choices"][0]["message"]
         except (KeyError, IndexError, TypeError) as exc:
-            raise LLMError(f"Unexpected OpenAI response structure: {data}") from exc
+            raise LLMError(f"Unexpected {self._PROVIDER_LABEL} response structure: {data}") from exc
 
         content = message.get("content")
         tool_calls = [
@@ -824,7 +841,7 @@ class OpenAILLM(LLMProvider):
 
     async def _stream_api(self, prompt: str) -> AsyncIterator[str]:
         """Make a single streaming OpenAI API call (no retry logic here)."""
-        url = f"{_OPENAI_BASE_URL}/chat/completions"
+        url = f"{self._base_url}/chat/completions"
         headers = {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
@@ -833,7 +850,7 @@ class OpenAILLM(LLMProvider):
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
+            self._TOKEN_LIMIT_FIELD: self.max_tokens,
             "stream": True,
         }
 
@@ -853,6 +870,60 @@ class OpenAILLM(LLMProvider):
 
 
 # ---------------------------------------------------------------------------
+# Groq implementation (OpenAI-compatible)
+# ---------------------------------------------------------------------------
+
+
+class GroqLLM(OpenAILLM):
+    """Groq chat completion via the OpenAI-compatible REST API.
+
+    Groq (https://groq.com) serves open-weight models (e.g.
+    ``openai/gpt-oss-120b``) behind the same protocol as OpenAI, so this
+    provider subclasses :class:`OpenAILLM` and only changes the base URL,
+    the API-key setting and the token-limit field (Groq uses the newer
+    ``max_completion_tokens``).  Streaming and native tool calling work
+    identically to OpenAI.
+
+    Args:
+        model:        Groq model id. Defaults to ``settings.llm_model``
+                      (set ``LLM_MODEL``; e.g. ``openai/gpt-oss-120b``).
+        api_key:      Groq API key. Defaults to ``settings.groq_api_key``.
+        temperature:  Sampling temperature.
+        max_tokens:   Maximum output tokens.
+        max_retries:  Retry attempts for transient errors.
+        base_delay:   Base retry delay in seconds.
+        jitter:       Whether to add jitter to retry delays.
+        timeout:      HTTP timeout in seconds.
+    """
+
+    _PROVIDER_LABEL: str = "Groq"
+    _TOKEN_LIMIT_FIELD: str = "max_completion_tokens"
+
+    def __init__(
+        self,
+        model: str | None = None,
+        api_key: str | None = None,
+        temperature: float = 0.2,
+        max_tokens: int = 1024,
+        max_retries: int = 3,
+        base_delay: float = 1.0,
+        jitter: bool = True,
+        timeout: float = _DEFAULT_TIMEOUT,
+    ) -> None:
+        super().__init__(
+            model=model or settings.llm_model,
+            api_key=api_key or settings.groq_api_key,
+            base_url=_GROQ_BASE_URL,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            max_retries=max_retries,
+            base_delay=base_delay,
+            jitter=jitter,
+            timeout=timeout,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Factory function
 # ---------------------------------------------------------------------------
 
@@ -864,7 +935,7 @@ def get_llm_provider(
     """Return an :class:`LLMProvider` instance based on configuration.
 
     Args:
-        provider: ``"gemini"`` or ``"openai"``. Defaults to
+        provider: ``"gemini"``, ``"openai"`` or ``"groq"``. Defaults to
                   ``settings.llm_provider``.
         **kwargs: Additional keyword arguments forwarded to the provider
                   constructor (e.g. ``temperature``, ``max_tokens``).
@@ -873,11 +944,14 @@ def get_llm_provider(
         A configured :class:`LLMProvider` instance.
 
     Raises:
-        ValueError: If *provider* is not ``"gemini"`` or ``"openai"``.
+        ValueError: If *provider* is not ``"gemini"``, ``"openai"`` or
+            ``"groq"``.
     """
     chosen = provider or settings.llm_provider
     if chosen == "gemini":
         return GeminiLLM(**kwargs)
     if chosen == "openai":
         return OpenAILLM(**kwargs)
-    raise ValueError(f"Unknown LLM provider {chosen!r}. Expected 'gemini' or 'openai'.")
+    if chosen == "groq":
+        return GroqLLM(**kwargs)
+    raise ValueError(f"Unknown LLM provider {chosen!r}. Expected 'gemini', 'openai' or 'groq'.")
