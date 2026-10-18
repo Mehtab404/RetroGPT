@@ -21,19 +21,29 @@
 
 ## 📊 Metrics (v1.0)
 
+Measured 2026-10-18 on the local Groq + fastembed stack
+(`openai/gpt-oss-120b`, `BAAI/bge-small-en-v1.5`, Qdrant `retro_games`,
+top-k 5, re-ranking on):
+
 | Metric | Target | Actual |
 |--------|--------|--------|
-| Retrieval Hit Rate @5 | ≥ 85% | _TBD_ |
-| MRR (Mean Reciprocal Rank) | ≥ 0.70 | _TBD_ |
-| Answer faithfulness (RAGAS) | ≥ 0.85 | _TBD_ |
-| p95 latency (uncached) | < 4 s | _TBD_ |
-| p95 latency (cached) | < 200 ms | _TBD_ |
+| Retrieval Hit Rate @5 | ≥ 85% | **100% (63/63 answerable)** |
+| MRR (Mean Reciprocal Rank) | ≥ 0.70 | **1.000** |
+| Refusal accuracy | — | **100% (6/6)** |
+| Answer faithfulness (RAGAS) | ≥ 0.85 | not run¹ |
+| p95 latency (uncached) | < 4 s | 11.7 s² |
+| p95 latency (cached) | < 200 ms | **45 ms @ 10 / 145 ms @ 50 VUs** |
 | Test coverage (AI service) | ≥ 70% | ≈96% (pytest-cov) |
 
-> The end-to-end metrics require a credentialed evaluation run
-> (`GOOGLE_API_KEY`); until then the offline retrieval sweep and the CI
-> regression guard (Issues #22/#23, see [`eval/README.md`](./eval/README.md))
-> keep retrieval quality measurable and protected.
+> ¹ RAGAS needs an OpenAI judge key plus the optional `ragas` package; neither
+> is configured on this stack, and the harness records the skip in its report
+> instead of inventing numbers.
+> ² Quota-throttled: the Groq free tier caps at 8K tokens/min, so the eval's
+> 70 generations were paced by retried `429 Too Many Requests` responses (288
+> logged; one question exhausted its retries → HTTP 502). Even the unthrottled
+> single-request smoke test took 4.97 s, so the < 4 s target is not
+> demonstrated on this hardware. Reports, raw numbers and conditions:
+> [`eval/results/`](./eval/results) and [ADR 0011](./docs/decisions.md).
 
 ---
 
@@ -58,19 +68,19 @@
                              │ - ingestion    │
                              │ - retrieval    │──────► Qdrant (vectors)
                              │ - re-ranking   │
-                             │ - generation   │──────► Gemini / OpenAI
+                             │ - generation   │──────► Gemini / Groq / OpenAI
                              └────────────────┘
 ```
 
 ### Tech Stack
 
-- **AI Service:** Python 3.12, FastAPI, httpx (native Gemini / OpenAI providers), fastembed (ONNX embeddings + re-ranking)
+- **AI Service:** Python 3.12, FastAPI, httpx (native Gemini / OpenAI / Groq providers), fastembed (ONNX embeddings + re-ranking)
 - **API Gateway:** Node.js 20 LTS, TypeScript, Express, zod
 - **Frontend:** React, Vite, TypeScript
 - **Vector DB:** Qdrant (hybrid search support)
 - **Cache/DB:** Redis 7, MongoDB 7
 - **Proxy:** Nginx
-- **LLM:** Google Gemini (default), OpenAI (optional)
+- **LLM:** Google Gemini (default), Groq or OpenAI (optional)
 - **Evaluation:** RAGAS + custom metrics
 - **Infrastructure:** Docker Compose, GitHub Actions CI/CD, AWS EC2/ECS
 
@@ -84,7 +94,7 @@
 - Git
 - Node.js 20 LTS
 - Python 3.12
-- Google Gemini API key ([Get one here](https://ai.google.dev/))
+- An LLM API key: [Gemini](https://ai.google.dev/) (default), [Groq](https://console.groq.com/keys) (has a free tier) or OpenAI
 
 ### Setup
 
@@ -95,7 +105,7 @@ cd RetroGPT
 
 # Configure environment variables
 copy .env.example .env
-# Edit .env and add your GOOGLE_API_KEY
+# Edit .env: add your LLM key (GOOGLE_API_KEY, or GROQ_API_KEY with LLM_PROVIDER=groq)
 
 # Start all services
 docker compose up -d --build
@@ -139,6 +149,32 @@ docker compose down
 # Stop and remove volumes (fresh start)
 docker compose down -v
 ```
+
+### Switching the LLM provider (e.g. Groq)
+
+The LLM provider and model are plain environment variables — no code changes
+needed. Gemini stays the default; Groq and OpenAI are OpenAI-compatible
+add-ons:
+
+```dotenv
+# Groq (https://console.groq.com/keys) — free tier available
+LLM_PROVIDER=groq
+LLM_MODEL=openai/gpt-oss-120b
+GROQ_API_KEY=gsk_...
+
+# Local embeddings (no API key) if you do not have a Google/OpenAI key;
+# re-ingest and pick a fresh collection when switching embedding models —
+# the ingestion CLI refuses to mix vector dimensions and errors clearly
+# if the existing collection was built with a different-size model.
+EMBEDDING_PROVIDER=fastembed
+FASTEMBED_MODEL=BAAI/bge-small-en-v1.5
+VECTOR_SIZE=384
+```
+
+Restart and verify with `docker compose up -d` then `docker compose exec
+ai-service python -m scripts.ingest /data/raw` (first run downloads the
+fastembed model into `/data/fastembed_cache`). See
+[ADR 0010](./docs/decisions.md) for the design rationale.
 
 ### Observability
 
@@ -224,7 +260,7 @@ docker compose exec frontend npm run test:e2e
 ### Evaluation Suite
 
 ```powershell
-# End-to-end evaluation (needs GOOGLE_API_KEY/OPENAI_API_KEY for answers)
+# End-to-end evaluation (needs an LLM key — GOOGLE_API_KEY / GROQ_API_KEY / OPENAI_API_KEY — for answers)
 docker compose exec ai-service python /eval/run_eval.py --label baseline
 
 # Retrieval-only evaluation — no API key needed (writes eval/results/)
@@ -280,17 +316,23 @@ metric definitions, flags, and CI details.
 ### Load Testing
 
 [`eval/loadtest/`](./eval/loadtest) contains a [k6](https://k6.io) harness that
-drives `POST /api/chat` at 10 and 50 concurrent users, cached and uncached:
+drives `POST /api/chat` at 10 and 50 concurrent users, cached and uncached.
+Measured 2026-10-18 (60 s per run, 100% `cached: true`, 0% failed requests):
 
 | Concurrent users | Uncached p50 / p95 | Cached p50 / p95 |
 |---|---|---|
-| 10 | _TBD_ | _TBD_ |
-| 50 | _TBD_ | _TBD_ |
+| 10 | not run¹ | 25 / 45 ms |
+| 50 | not run¹ | 113 / 145 ms |
 
-> Real numbers need a credentialed stack (`GOOGLE_API_KEY` for generation) and
-> a raised gateway rate limit; the cached pass replays the 70-question eval
-> dataset and asserts `cached: true`. Runbook and caveats:
-> [`eval/loadtest/README.md`](./eval/loadtest/README.md).
+> ¹ Uncached runs were not executed: one pass generates 70 answers (~110K
+> tokens) and the remaining Groq free-tier budget (8K tokens/min, ~200K
+> tokens/day) was already mostly consumed by the credentialed evaluation, so
+> the runs would either exhaust the daily quota or measure `429` retries. The
+> cached runs were warmed with a 10-question subset (`POOL=10`, documented
+> deviation — the cache-hit path is identical). Throughput: 358 / 438 req/s;
+> max latency 303 / 317 ms. Runbook and caveats:
+> [`eval/loadtest/README.md`](./eval/loadtest/README.md); conditions and
+> limitations: [ADR 0011](./docs/decisions.md).
 
 ---
 
@@ -343,11 +385,11 @@ See [`docs/deployment.md`](./docs/deployment.md) for the full AWS walkthrough
 Store secrets in AWS Systems Manager Parameter Store or Secrets Manager. Never commit `.env` files. Start from [`.env.production.example`](./.env.production.example).
 
 Required variables:
-- `GOOGLE_API_KEY` (embeddings + default LLM)
+- LLM provider key: `GOOGLE_API_KEY` (default LLM + embeddings), or `GROQ_API_KEY` with `LLM_PROVIDER=groq`, or `OPENAI_API_KEY`
 - `API_KEY` (gateway authentication; also baked into the frontend bundle at build time)
 - `DOMAIN`, `ECR_REGISTRY`
 - `REDIS_PASSWORD`, `MONGO_USER`, `MONGO_PASSWORD`
-- optional: `OPENAI_API_KEY`, `PUBLIC_ORIGIN`, `AI_WORKERS`, tuning vars from the example file
+- optional: `PUBLIC_ORIGIN`, `AI_WORKERS`, `EMBEDDING_PROVIDER=fastembed` (key-free local embeddings), tuning vars from the example file
 
 ---
 
@@ -544,7 +586,7 @@ This is a portfolio/learning project. Contributions are welcome!
 - [x] M3: Frontend UI
 - [x] M4: Evaluation suite and quality improvements
 - [ ] M5: Production deployment (AWS + CI/CD) — structured logging, production compose and the CD workflow (`deploy.yml`) done; public URL pending AWS credentials
-- [ ] M6: Polish (load tests, documentation) — streaming done (#25); agent mode with native tool calling done (#35); k6 load-test harness ready (numbers pending GOOGLE_API_KEY)
+- [ ] M6: Polish (load tests, documentation) — streaming done (#25); agent mode with native tool calling done (#35); k6 load-test harness ready (numbers pending a provider key)
 
 See [GitHub Issues](https://github.com/Mehtab404/RetroGPT/issues) for detailed task breakdown.
 
@@ -576,9 +618,14 @@ _This section will be filled after M4-M6 completion._
 - End-to-end CI/CD with automated testing
 
 ### Challenges Overcome
-- TBD: Retrieval accuracy optimization
-- TBD: Latency vs. quality tradeoffs
-- TBD: Chunking strategy selection
+- Retrieval accuracy: hybrid BM25 + vector search with RRF and cross-encoder
+  re-ranking reached Hit Rate@5 = 100% and MRR = 1.000 on the 70-question
+  evaluation ([ADR 0011](./docs/decisions.md))
+- Latency vs. quality: Redis caching brings repeated queries to a 45–145 ms
+  p95 (10–50 VUs) versus multi-second uncached generation, measured in
+  [`eval/results/`](./eval/results)
+- Chunking strategy: picked 800 chars / 120 overlap from an offline sweep
+  ([ADR 0004](./docs/decisions.md)), pinned by the CI regression guard
 
 ---
 

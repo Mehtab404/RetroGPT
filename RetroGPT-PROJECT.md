@@ -19,15 +19,21 @@ RetroGPT is a chatbot that answers questions about classic/retro video games (Po
 - No user accounts/payments in v1 (simple API key auth only).
 - No model training or fine-tuning.
 
-### Success Metrics (fill in real numbers as you go)
+### Success Metrics (measured 2026-10-18)
 | Metric | Target | Actual |
 |---|---|---|
-| Retrieval Hit Rate @5 (eval set) | ≥ 85% | _TBD_ |
-| MRR (Mean Reciprocal Rank) | ≥ 0.70 | _TBD_ |
-| Answer faithfulness (RAGAS) | ≥ 0.85 | _TBD_ |
-| p95 latency (uncached) | < 4 s | _TBD_ |
-| p95 latency (cached) | < 200 ms | _TBD_ |
-| Test coverage (AI service) | ≥ 70% | _TBD_ |
+| Retrieval Hit Rate @5 (eval set) | ≥ 85% | 100% (63/63 answerable) |
+| MRR (Mean Reciprocal Rank) | ≥ 0.70 | 1.000 |
+| Answer faithfulness (RAGAS) | ≥ 0.85 | not run¹ |
+| p95 latency (uncached) | < 4 s | 11.7 s² |
+| p95 latency (cached) | < 200 ms | 45 ms @ 10 VUs / 145 ms @ 50 VUs |
+| Test coverage (AI service) | ≥ 70% | ≈96% (pytest-cov) |
+
+> ¹ Needs an OpenAI judge key + the optional `ragas` package (skipped, not
+> fabricated). ² Groq free-tier quota throttling; even the unthrottled smoke
+> test took 4.97 s. Conditions and raw reports: `eval/results/2026-10-18-*`
+> and ADR 0011 in `docs/decisions.md`; the two uncached k6 scenarios remain
+> pending (quota-bounded, see `eval/loadtest/README.md`).
 
 ---
 
@@ -52,7 +58,7 @@ RetroGPT is a chatbot that answers questions about classic/retro video games (Po
                              │ - ingestion    │
                              │ - retrieval    │──────► Qdrant (vector DB)
                              │ - re-ranking   │
-                             │ - generation   │──────► Gemini / OpenAI API
+                             │ - generation   │──────► Gemini / Groq / OpenAI API
                              └────────────────┘
 ```
 
@@ -70,8 +76,8 @@ RetroGPT is a chatbot that answers questions about classic/retro video games (Po
 | Layer | Technology | Why |
 |---|---|---|
 | AI service | Python 3.12, FastAPI, LangChain | Standard GenAI stack |
-| Embeddings | Google Gemini embeddings (default), OpenAI (optional) | Configurable via env |
-| LLM | Gemini Flash model (default), OpenAI (optional) | Cheap + fast; model name in env |
+| Embeddings | Google Gemini (default), OpenAI, or local fastembed (no API key) | Configurable via env |
+| LLM | Gemini Flash (default), Groq, or OpenAI | Cheap + fast; provider + model name in env |
 | Vector DB | Qdrant (Docker) | Free, local, supports hybrid search |
 | Re-ranker | Cross-encoder (`sentence-transformers`) | Improves retrieval accuracy |
 | API gateway | Node.js 20 LTS, TypeScript, Express, zod | Backend skill showcase |
@@ -116,7 +122,7 @@ retrogpt/
 │   │   │   └── reranker.py        # cross-encoder re-ranking
 │   │   ├── generation/
 │   │   │   ├── prompts.py         # system + RAG prompt templates
-│   │   │   └── llm.py             # provider abstraction (Gemini/OpenAI)
+│   │   │   └── llm.py             # provider abstraction (Gemini/OpenAI/Groq)
 │   │   └── schemas.py             # request/response models
 │   ├── scripts/
 │   │   └── ingest.py              # CLI: python -m scripts.ingest ./data/raw
@@ -174,16 +180,19 @@ retrogpt/
 
 ```env
 # --- LLM / Embeddings ---
-LLM_PROVIDER=gemini                # gemini | openai
-LLM_MODEL=                         # e.g. a current Gemini Flash model name
-EMBEDDING_PROVIDER=gemini
+LLM_PROVIDER=gemini                # gemini | openai | groq
+LLM_MODEL=                         # e.g. a current Gemini Flash model name (or openai/gpt-oss-120b for groq)
+EMBEDDING_PROVIDER=gemini          # gemini | openai | fastembed (local ONNX, no API key)
 EMBEDDING_MODEL=                   # e.g. a current Gemini embedding model name
 GOOGLE_API_KEY=
 OPENAI_API_KEY=
+GROQ_API_KEY=                      # required when LLM_PROVIDER=groq
 
 # --- Vector DB ---
 QDRANT_URL=http://qdrant:6333
 QDRANT_COLLECTION=retro_games
+# Must match the embedding model (768 gemini, 1536 openai, 384 fastembed bge-small)
+VECTOR_SIZE=768
 
 # --- Retrieval ---
 CHUNK_SIZE=800
@@ -210,7 +219,7 @@ RATE_LIMIT_PER_MIN=30
 ### Prerequisites
 - Git, Docker Desktop (WSL2 backend enabled), Node.js 20 LTS, Python 3.12
 - GitHub CLI (`gh`) — optional, for creating issues/PRs from terminal
-- A Gemini API key (Google AI Studio) or OpenAI API key
+- An LLM API key: Gemini (Google AI Studio), Groq, or OpenAI
 
 ### First Run
 ```powershell
@@ -348,7 +357,7 @@ gh issue create --title "Set up Docker Compose with Qdrant, Redis, MongoDB" --la
 - ✅ Acceptance: unit tests verify chunk sizes, overlap, and metadata.
 
 **#8 Embeddings provider abstraction** — `ai`
-- `EmbeddingProvider` interface with Gemini and OpenAI implementations, selected via env. Batch requests and retry with exponential backoff.
+- `EmbeddingProvider` interface with Gemini, OpenAI and local fastembed implementations, selected via env. Batch requests and retry with exponential backoff.
 - ✅ Acceptance: switching provider requires only an env change; tests use a mocked provider.
 
 **#9 Qdrant vector store + ingestion pipeline** — `ai`

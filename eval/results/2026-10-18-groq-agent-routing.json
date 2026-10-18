@@ -1,0 +1,198 @@
+{
+  "label": "groq-agent-routing",
+  "generated_at": "2026-10-18 11:26:07 UTC",
+  "api_url": "http://localhost:8000/agent",
+  "cases": "/eval/agent_cases.jsonl",
+  "metrics": {
+    "pass_rate": 0.9,
+    "counts": {
+      "total": 10,
+      "passed": 9,
+      "failed": 0,
+      "errors": 1
+    },
+    "per_tool": {
+      "search_game_docs": {
+        "n": 5,
+        "passed": 5
+      },
+      "compare_games": {
+        "n": 2,
+        "passed": 2
+      },
+      "list_games_by_year": {
+        "n": 2,
+        "passed": 2
+      }
+    },
+    "steps": {
+      "mean": 2.0,
+      "max": 2
+    },
+    "latency_ms": {
+      "mean": 10961.38,
+      "p50": 14844.35,
+      "p95": 21249.18
+    }
+  },
+  "results": [
+    {
+      "id": "agent-01",
+      "question": "How many points is a large asteroid worth in Asteroids?",
+      "expected_tools": [
+        "search_game_docs"
+      ],
+      "called_tools": [
+        "search_game_docs"
+      ],
+      "matched_tool": "search_game_docs",
+      "passed": true,
+      "steps": 2,
+      "latency_ms": 2190.15,
+      "answer": "A large asteroid is worth **20 points** in Asteroids【1†L1-L2】.",
+      "error": null
+    },
+    {
+      "id": "agent-02",
+      "question": "What enemies can the player encounter in Centipede?",
+      "expected_tools": [
+        "search_game_docs"
+      ],
+      "called_tools": [
+        "search_game_docs"
+      ],
+      "matched_tool": "search_game_docs",
+      "passed": true,
+      "steps": 2,
+      "latency_ms": 4917.66,
+      "answer": "In Centipede the player can run into several different foes:\n\n* The **centipede** itself – a segmented creature that moves horizontally, drops down when it hits mushrooms or a screen edge, and splits into shorter centipedes when shot[1]  \n* The **spider**, which bounces diagonally across the lower screen, eats mushrooms and kills the player on contact[2]  \n* The **flea**, which drops straight down, leaves a trail of mushrooms and requires two hits in later levels[2]  \n* The **scorpion**, which appears as the game progresses and must be destroyed to prevent mushroom poisoning[3]",
+      "error": null
+    },
+    {
+      "id": "agent-03",
+      "question": "How does the player earn points in Breakout?",
+      "expected_tools": [
+        "search_game_docs"
+      ],
+      "called_tools": [
+        "search_game_docs"
+      ],
+      "matched_tool": "search_game_docs",
+      "passed": true,
+      "steps": 2,
+      "latency_ms": 15055.14,
+      "answer": "In **Breakout**, points are awarded each time the ball destroys a brick. The value depends on the brick’s color:\n\n- Red bricks (bottom rows) – 1 point each  \n- Orange bricks – 3 points each  \n- Green bricks – 5 points each  \n- Yellow bricks (top rows) – 7 points each  \n\nThus, the player’s score increases by breaking bricks, with higher‑valued bricks giving more points【1†L1-L4】.",
+      "error": null
+    },
+    {
+      "id": "agent-04",
+      "question": "What happens when all of the player's missile bases are destroyed in Missile Command?",
+      "expected_tools": [
+        "search_game_docs"
+      ],
+      "called_tools": [
+        "search_game_docs"
+      ],
+      "matched_tool": "search_game_docs",
+      "passed": true,
+      "steps": 2,
+      "latency_ms": 14844.35,
+      "answer": "I don't know — this information is not available in the provided sources.",
+      "error": null
+    },
+    {
+      "id": "agent-05",
+      "question": "How does a player clear a wave in Space Invaders?",
+      "expected_tools": [
+        "search_game_docs"
+      ],
+      "called_tools": [
+        "search_game_docs"
+      ],
+      "matched_tool": "search_game_docs",
+      "passed": true,
+      "steps": 2,
+      "latency_ms": 19050.23,
+      "answer": "A wave is cleared when the player destroys every alien in the formation. When all 55 invaders are eliminated, the game starts a new wave with a fresh formation and increased difficulty【2†citation】. The core objective is to eliminate all invaders before they reach the bottom of the screen【3†citation】.",
+      "error": null
+    },
+    {
+      "id": "agent-06",
+      "question": "Compare the scoring systems in Asteroids and Breakout.",
+      "expected_tools": [
+        "compare_games"
+      ],
+      "called_tools": [
+        "compare_games"
+      ],
+      "matched_tool": "compare_games",
+      "passed": true,
+      "steps": 2,
+      "latency_ms": 15002.11,
+      "answer": "**Scoring in Asteroids**  \n- Points are tied to the objects you destroy: large asteroids = 20 pts, medium = 50 pts, small = 100 pts; large saucers = 200 pts, small saucers = 1 000 pts【2†L1-L9】.  \n- An extra ship is granted once you reach 10 000 pts【3†L1-L3】.  \n\n**Scoring in Breakout**  \n- Points come from breaking bricks, with values based on brick row colour: yellow (top rows) = 7 pts, green = 5 pts, orange = 3 pts, red (bottom rows) = 1 pt【4†L7-L13】.  \n\n**Comparison**  \n- Asteroids rewards you for destroying moving hazards (asteroids, saucers) of varying sizes, while Breakout rewards you for clearing static bricks whose value decreases toward the bottom of the screen.  \n- Asteroids includes a high‑score milestone (extra ship at 10 000 pts); Breakout’s scoring is purely additive with no built‑in bonuses.  ",
+      "error": null
+    },
+    {
+      "id": "agent-07",
+      "question": "Which game is harder to survive, Pac-Man or Centipede?",
+      "expected_tools": [
+        "compare_games"
+      ],
+      "called_tools": [
+        "compare_games"
+      ],
+      "matched_tool": "compare_games",
+      "passed": true,
+      "steps": 2,
+      "latency_ms": 21249.18,
+      "answer": "Pac‑Man becomes significantly harder to survive as you progress – ghosts speed up, power‑pellet time shrinks, chase/scatter patterns change, and by level 21 the split‑screen bug makes the game “nearly unbeatable”【3†citation=3】.  \nCentipede also gets tougher (the centipede and other enemies move faster and spawn more aggressively)【5†citation=5】【6†citation=6】, but its documentation does not describe an eventual point where survival is essentially impossible.  \n\n**Therefore, Pac‑Man is the harder of the two games to survive.**",
+      "error": null
+    },
+    {
+      "id": "agent-08",
+      "question": "Compare the controls of Missile Command and Space Invaders.",
+      "expected_tools": [
+        "compare_games"
+      ],
+      "called_tools": [],
+      "matched_tool": "",
+      "passed": false,
+      "steps": 0,
+      "latency_ms": 15318.85,
+      "answer": "",
+      "error": "HTTP 502 from http://localhost:8000/agent: {\"detail\":\"LLM provider error: LLM API failed after 4 attempts: Client error '429 Too Many Requests' for url 'https://api.groq.com/openai/v1/chat/completions'\\nFor more information check: https://deve"
+    },
+    {
+      "id": "agent-09",
+      "question": "Which games in the knowledge base were released in 1980?",
+      "expected_tools": [
+        "list_games_by_year"
+      ],
+      "called_tools": [
+        "list_games_by_year"
+      ],
+      "matched_tool": "list_games_by_year",
+      "passed": true,
+      "steps": 2,
+      "latency_ms": 1084.73,
+      "answer": "Missile Command and Pac‑Man were released in 1980[1].",
+      "error": null
+    },
+    {
+      "id": "agent-10",
+      "question": "What games were released in 1976?",
+      "expected_tools": [
+        "list_games_by_year"
+      ],
+      "called_tools": [
+        "list_games_by_year"
+      ],
+      "matched_tool": "list_games_by_year",
+      "passed": true,
+      "steps": 2,
+      "latency_ms": 5258.88,
+      "answer": "Breakout was released in 1976[1].",
+      "error": null
+    }
+  ]
+}

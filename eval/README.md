@@ -55,7 +55,8 @@ python eval/run_eval.py --api-url http://localhost/api --endpoint /api/chat --ap
 ```
 
 Requires a populated Qdrant collection (`python -m scripts.ingest /data/raw`)
-and a real `GOOGLE_API_KEY`/`OPENAI_API_KEY` in the AI service for LLM answers.
+and a real LLM provider key in the AI service for answers — `GOOGLE_API_KEY`
+(default), or `GROQ_API_KEY` with `LLM_PROVIDER=groq`/`LLM_MODEL` set.
 
 ### Useful flags
 
@@ -107,6 +108,9 @@ Embedders:
 | `fastembed` | Local ONNX model (`BAAI/bge-small-en-v1.5` by default); `--fastembed-cache` persists the download |
 | `gemini` / `openai` | Hosted embeddings; needs `GOOGLE_API_KEY` / `OPENAI_API_KEY` in the container |
 
+The service itself also accepts `EMBEDDING_PROVIDER=fastembed` (local ONNX, no
+API key) for key-free ingestion and queries.
+
 Notes:
 
 - The scratch collection (`--collection`, default `retrogpt_eval`) is deleted
@@ -127,6 +131,12 @@ Notes:
 - **Latency** — mean / p50 / p95 per uncached request.
 - **RAGAS** (optional) — answer faithfulness and relevancy; contexts are
   approximated with the service's returned snippets.
+
+Latest credentialed run (2026-10-18, Groq `openai/gpt-oss-120b` + fastembed
+`BAAI/bge-small-en-v1.5`): Hit Rate@5 **100% (63/63)**, MRR **1.000**, refusal
+accuracy **100% (6/6)**, one provider `429` error — report:
+[`results/2026-10-18-groq-e2e.md`](./results/2026-10-18-groq-e2e.md); full
+conditions in [ADR 0011](../docs/decisions.md).
 
 ## RAGAS setup
 
@@ -163,8 +173,8 @@ docker compose exec ai-service python /eval/retrieval_eval.py `
 Exit codes: `0` passed · `1` guard failed · `2` fatal. The run's JSON /
 Markdown report is uploaded as the `retrieval-eval-report` CI artifact.
 
-The credentialed end-to-end eval (`run_eval.py` with Gemini/OpenAI) remains
-the source of truth for answer-quality metrics; the offline guard only
+The credentialed end-to-end eval (`run_eval.py` with Gemini, Groq or OpenAI)
+remains the source of truth for answer-quality metrics; the offline guard only
 protects retrieval from regressions.
 
 ## Load testing (`loadtest/`, #33)
@@ -175,7 +185,9 @@ the running compose stack (Nginx → gateway → Redis/AI service). Uncached run
 need a provider key (they reach the LLM); cached runs replay a warmed cache
 and work without one. The full runbook — rate-limit raise, cache flush,
 reading p50/p95, caveats — lives in
-[`loadtest/README.md`](./loadtest/README.md).
+[`loadtest/README.md`](./loadtest/README.md). Latest run (2026-10-18):
+cached-only, p95 45 ms @ 10 VUs / 145 ms @ 50 VUs — uncached runs skipped on
+quota (see that README).
 
 ## Agent routing evaluation (`agent_eval.py`, #35)
 
@@ -200,7 +212,9 @@ docker compose exec ai-service python /eval/agent_eval.py --label agent-routing
 
 Reports land in `results/<date>-agent-routing.{json,md}`. Exit codes:
 `0` ok · `1` pass rate below the guard · `2` fatal (missing cases, service
-down).
+down). Latest credentialed run (2026-10-18): **90% (9/10)**, above the ≥ 8/10
+target; the single miss was a provider `429` error, not a routing mistake
+([`results/2026-10-18-groq-agent-routing.md`](./results/2026-10-18-groq-agent-routing.md)).
 
 The unit tests for the harness (`tests/test_agent_eval.py`) and for the
 agent loop itself (`ai-service/tests/test_agent.py`) run in CI like any

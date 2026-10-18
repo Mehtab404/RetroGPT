@@ -29,7 +29,8 @@ per run — enough to read p50/p95, but not a large-sample benchmark.
 
 - Local stack up and healthy (`docker compose ps`) with data ingested —
   see the Quick Start in the [root README](../../README.md).
-- `GOOGLE_API_KEY` (or `OPENAI_API_KEY` with `LLM_PROVIDER=openai`) set in
+- An LLM provider key (`GOOGLE_API_KEY`, or `GROQ_API_KEY` with
+  `LLM_PROVIDER=groq`, or `OPENAI_API_KEY` with `LLM_PROVIDER=openai`) set in
   `.env`, otherwise every **uncached** request returns HTTP 502 from the AI
   service. **Cached** runs never reach the LLM and work without a key.
 - Docker (the k6 container reaches the stack via `host.docker.internal`).
@@ -79,15 +80,26 @@ http_req_duration..............: avg=... min=... med=10.36ms p(90)=... p(95)=17.
 - A warm run that reports `cached flag is false` was not warmed: the cache was
   flushed after the cold pass or the 24 h TTL (`CACHE_TTL_SECONDS`) expired.
 
-Record the four cells in the table (numbers pending a credentialed run):
+Measured 2026-10-18 (Groq + fastembed stack, `warm` mode, 60 s per run, rate
+limit raised to 100,000 req/min for the runs and restored afterwards;
+artifacts: `eval/results/2026-10-18-k6-warm-{10,50}vu.{json,log}`):
 
 | Concurrent users | Uncached p50 / p95 | Cached p50 / p95 |
 |---|---|---|
-| 10 | _TBD_ | _TBD_ |
-| 50 | _TBD_ | _TBD_ |
+| 10 | not run* | 25 / 45 ms |
+| 50 | not run* | 113 / 145 ms |
 
-Copy the filled table into the **Load Testing** section of the
-[root README](../../README.md).
+- Warm-run health: 100% checks (`status is 200` + `cached flag is true`),
+  0.00% `http_req_failed`, 21,496 / 26,328 requests (358 / 438 req/s).
+- *Uncached runs were skipped on purpose: each pass generates 70 answers
+  (~110K tokens) and the remaining Groq free-tier budget (8K TPM / ~200K TPD)
+  was already mostly spent by the credentialed evaluation; a 50-VU burst
+  would mostly record `429` retries. Run them after a quota reset with the
+  runbook above.
+- Deviation: the cache was warmed with the first 10 dataset questions
+  (`POOL=10`) instead of all 70 to stay inside the same budget; the cache-hit
+  path is identical, only question variety changes.
+- The table is mirrored in the root README's **Load Testing** section.
 
 ## Caveats
 
@@ -111,6 +123,6 @@ Copy the filled table into the **Load Testing** section of the
 |---|---|
 | `status is 200` fails with 401 | `API_KEY` does not match the gateway |
 | 429 responses | rate limit not raised, or gateway not recreated after `$env:RATE_LIMIT_PER_MIN` |
-| 502 on every cold request | `GOOGLE_API_KEY` missing or provider error (check `docker compose logs ai-service`) |
+| 502 on every cold request | LLM provider key missing (`GOOGLE_API_KEY` / `GROQ_API_KEY` / `OPENAI_API_KEY`) or provider error (check `docker compose logs ai-service`) |
 | Warm run reports `cached: false` | cache flushed after warming, or TTL expired |
 | `dial tcp: lookup host.docker.internal` | Linux host: add `--add-host=host.docker.internal:host-gateway` |

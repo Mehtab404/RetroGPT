@@ -274,3 +274,46 @@ The owner plans to run RetroGPT on the Groq API (`https://api.groq.com/openai/v1
 
 ---
 
+## ADR 0011: Credentialed Evaluation Results — Groq `openai/gpt-oss-120b` + fastembed `BAAI/bge-small-en-v1.5` (2026-10-18)
+
+- **Status:** Accepted (measurement record)
+- **Date:** 2026-10-18
+- **Issue:** M6 — README metric placeholders (#18/#19/#33/#35)
+
+### Context
+ADR 0010 moved generation to Groq and embeddings to local fastembed, unblocking the end-to-end metrics that ADRs 0002–0004 left as `_TBD_` in the README. Before running anything, the Groq key was probed with a single 1-token request. The response headers showed the binding constraints: **8,000 tokens/minute** (`x-ratelimit-limit-tokens`) and a 1,000-request window (`x-ratelimit-limit-requests`); the documented free tier adds a ~200K tokens/day cap, which the plan held as the daily budget. Estimated cost per generation: ~1.5–2.5K tokens (RAG prompt with 5 passages + answer), i.e. ~110–125K tokens per 70-question pass — so the full documented matrix (eval + agent + two uncached k6 passes) does not fit one daily budget on a free-tier key.
+
+### What was run (2026-10-18, local Docker Compose dev stack)
+- **End-to-end eval** — `docker compose exec ai-service python /eval/run_eval.py --label groq-e2e --with-ragas --min-hit-rate 0.85` (70 questions through `POST /query`; generation on Groq `openai/gpt-oss-120b`, embeddings on fastembed `BAAI/bge-small-en-v1.5` 384-dim, Qdrant `retro_games` with 38 chunks, top-k 5, re-ranking on).
+- **Agent-routing eval** — `docker compose exec ai-service python /eval/agent_eval.py --label groq-agent-routing` (10 labeled prompts through `POST /agent`).
+- **k6 load test, cached** — `eval/loadtest/chat.js` in `warm` mode, 60 s per run, 10 and 50 VUs; gateway rate limit raised to 100,000 req/min for the runs and restored afterwards. The cache was warmed first with the first 10 dataset questions (10 real generations through the gateway).
+- **Citation regression tests** — re-run after the evaluation: 19 Python + 14 Vitest tests, all passing.
+
+### Results (actual)
+| Measurement | Result |
+|---|---|
+| Hit Rate@5 (70-question dataset) | **100%** (63/63 answerable; 1 provider error excluded) |
+| MRR | **1.000** |
+| Refusal accuracy | **100%** (6/6) |
+| Agent routing pass rate | **90% (9/10)** — target ≥ 8/10 met |
+| RAGAS faithfulness / relevancy | **not run** — `ragas` not installed and no OpenAI judge key; the harness recorded the skip |
+| Uncached latency (eval, p50 / p95) | 7.07 s / 11.67 s — quota-throttled (see Limitations) |
+| Cached latency @ 10 VUs (p50 / p95) | 25 ms / 45 ms (358 req/s, 0% errors, 100% `cached: true`) |
+| Cached latency @ 50 VUs (p50 / p95) | 113 ms / 145 ms (438 req/s, 0% errors, 100% `cached: true`) |
+| Uncached k6 @ 10 / 50 VUs | **not run** — see Limitations |
+
+Artifacts: `eval/results/2026-10-18-groq-e2e.{json,md}`,
+`2026-10-18-groq-agent-routing.{json,md}` and
+`2026-10-18-k6-warm-{10,50}vu.{json,log}` (the earlier 2026-10-17
+retrieval-only run remains in the same directory for comparison).
+
+### Limitations (as measured)
+1. **429 throttling is part of the numbers.** The 8K TPM cap forced 288 `429 Too Many Requests` responses during the eval window, all absorbed by the provider-retry policy (1–4 s backoff) except two: question `si-10` (eval) and case `agent-08` (agent run) exhausted their 4 attempts and returned HTTP 502 — the only two errors. Eval latencies therefore include backoff waits and overstate unthrottled latency; even the single unthrottled cold smoke test took 4.97 s, above the < 4 s latency target.
+2. **RAGAS could not run.** It needs the optional `ragas` package plus an OpenAI judge/embeddings key; neither is configured, and the run reports the skip instead of fabricating numbers.
+3. **Uncached k6 runs were not executed.** One `cold` pass generates 70 answers (~110K tokens); documenting both scenarios (10 and 50 VUs, flush between) needs ~240K tokens against a mostly-consumed ~200K/day budget, and the 50-VU burst would mostly measure `429` retries rather than service latency. The cached runs were kept to a 10-question warmed subset (`POOL=10`, ~16K tokens) for the same reason.
+4. **Local dev stack, single machine.** Cached numbers are relative (10 vs. 50 VUs), not production SLOs; cached hits still write both messages to MongoDB by design.
+
+### Consequences
+- README metric and load-testing tables now carry measured values with these caveats instead of `_TBD_`; `eval/results/` keeps the raw reports of both the 2026-10-17 retrieval-only and the 2026-10-18 credentialed runs.
+- The remaining gap is budget-bounded: re-running the two uncached k6 scenarios after a quota reset completes the load-test matrix — the exact commands are in `eval/loadtest/README.md`.
+- Future credentialed evals on a free-tier key should pace requests (or use a paid tier) so latency numbers stay free of backoff waits; RAGAS needs `OPENAI_API_KEY` exported for the judge before `--with-ragas` can produce faithfulness/relevancy scores.

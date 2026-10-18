@@ -1,0 +1,1579 @@
+{
+  "label": "groq-e2e",
+  "generated_at": "2026-10-18 11:23:49 UTC",
+  "api_url": "http://localhost:8000/query",
+  "dataset": "/eval/dataset.jsonl",
+  "top_k": 5,
+  "metrics": {
+    "hit_rate": 1.0,
+    "mrr": 1.0,
+    "refusal_accuracy": 1.0,
+    "counts": {
+      "total": 70,
+      "evaluated": 69,
+      "answerable": 63,
+      "unanswerable": 6,
+      "hits": 63,
+      "refusals": 6,
+      "errors": 1,
+      "top_k": 5
+    },
+    "latency_ms": {
+      "mean": 7828.64,
+      "p50": 7071.65,
+      "p95": 11668.9
+    },
+    "per_category": {
+      "easy": {
+        "n": 29,
+        "hits": 29,
+        "hit_rate": 1.0,
+        "mrr": 1.0
+      },
+      "hard": {
+        "n": 23,
+        "hits": 23,
+        "hit_rate": 1.0,
+        "mrr": 1.0
+      },
+      "multi-hop": {
+        "n": 10,
+        "hits": 10,
+        "hit_rate": 1.0,
+        "mrr": 1.0
+      },
+      "normal": {
+        "n": 1,
+        "hits": 1,
+        "hit_rate": 1.0,
+        "mrr": 1.0
+      }
+    }
+  },
+  "ragas": null,
+  "ragas_note": "skipped — ragas is not installed (No module named 'ragas')",
+  "results": [
+    {
+      "id": "ast-01",
+      "game": "asteroids",
+      "category": "easy",
+      "question": "How many points is a large asteroid worth in Asteroids?",
+      "expected_source_ids": [
+        "asteroids_manual"
+      ],
+      "retrieved_source_ids": [
+        "asteroids_manual",
+        "asteroids_manual",
+        "asteroids_manual",
+        "space_invaders_manual",
+        "missile_command_manual"
+      ],
+      "answer": "A large asteroid is worth **20 points**[1][2].",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 3862.77,
+      "error": null
+    },
+    {
+      "id": "ast-02",
+      "game": "asteroids",
+      "category": "easy",
+      "question": "How many points do you get for destroying the small saucer in Asteroids?",
+      "expected_source_ids": [
+        "asteroids_manual"
+      ],
+      "retrieved_source_ids": [
+        "asteroids_manual",
+        "asteroids_manual",
+        "asteroids_manual",
+        "asteroids_manual",
+        "centipede_manual"
+      ],
+      "answer": "Destroying a small saucer awards **1,000 points**[1][2][3].",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 2471.65,
+      "error": null
+    },
+    {
+      "id": "ast-03",
+      "game": "asteroids",
+      "category": "easy",
+      "question": "How many ships (lives) do you start with in Asteroids?",
+      "expected_source_ids": [
+        "asteroids_manual"
+      ],
+      "retrieved_source_ids": [
+        "asteroids_manual",
+        "asteroids_manual",
+        "asteroids_manual",
+        "space_invaders_manual",
+        "asteroids_manual"
+      ],
+      "answer": "You begin the game with **3 ships (lives)** [1].",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 2969.23,
+      "error": null
+    },
+    {
+      "id": "ast-04",
+      "game": "asteroids",
+      "category": "easy",
+      "question": "What is the chance that your ship explodes when using hyperspace in Asteroids?",
+      "expected_source_ids": [
+        "asteroids_manual"
+      ],
+      "retrieved_source_ids": [
+        "asteroids_manual",
+        "asteroids_manual",
+        "asteroids_manual",
+        "asteroids_manual",
+        "missile_command_manual"
+      ],
+      "answer": "The hyperspace maneuver carries a **25 % chance** that your ship will explode when it rematerializes[1].",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 2354.14,
+      "error": null
+    },
+    {
+      "id": "ast-05",
+      "game": "asteroids",
+      "category": "hard",
+      "question": "What does each asteroid size break into when destroyed in Asteroids?",
+      "expected_source_ids": [
+        "asteroids_manual"
+      ],
+      "retrieved_source_ids": [
+        "asteroids_manual",
+        "asteroids_manual",
+        "asteroids_manual",
+        "asteroids_manual",
+        "centipede_manual"
+      ],
+      "answer": "- Large asteroids break into 2 medium asteroids.  \n- Medium asteroids break into 2 small asteroids.  \n- Small asteroids are eliminated completely when destroyed. [1]",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 2665.47,
+      "error": null
+    },
+    {
+      "id": "ast-06",
+      "game": "asteroids",
+      "category": "hard",
+      "question": "At how many points do you earn an extra ship in Asteroids?",
+      "expected_source_ids": [
+        "asteroids_manual"
+      ],
+      "retrieved_source_ids": [
+        "asteroids_manual",
+        "asteroids_manual",
+        "asteroids_manual",
+        "space_invaders_manual",
+        "space_invaders_manual"
+      ],
+      "answer": "You earn an extra ship at **10,000 points**【1†L13-L15】【2†L22-L24】",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 2454.07,
+      "error": null
+    },
+    {
+      "id": "ast-07",
+      "game": "asteroids",
+      "category": "multi-hop",
+      "question": "Compare the two flying saucers in Asteroids: which is worth more and which aims more accurately?",
+      "expected_source_ids": [
+        "asteroids_manual"
+      ],
+      "retrieved_source_ids": [
+        "asteroids_manual",
+        "asteroids_manual",
+        "asteroids_manual",
+        "asteroids_manual",
+        "missile_command_manual"
+      ],
+      "answer": "The **small saucer** is worth more (1 000 points) and it aims accurately at the player, while the **large saucer** is worth fewer points (200) and fires randomly【1†L9-L12】【3†L1-L4】.",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 2560.97,
+      "error": null
+    },
+    {
+      "id": "ast-08",
+      "game": "asteroids",
+      "category": "hard",
+      "question": "What happens when you clear all asteroids in Asteroids?",
+      "expected_source_ids": [
+        "asteroids_manual"
+      ],
+      "retrieved_source_ids": [
+        "asteroids_manual",
+        "asteroids_manual",
+        "asteroids_manual",
+        "asteroids_manual",
+        "centipede_manual"
+      ],
+      "answer": "After you destroy every asteroid, the game starts a new wave that contains more asteroids and is harder—saucers appear earlier and the overall difficulty increases[1].",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 2445.5,
+      "error": null
+    },
+    {
+      "id": "ast-09",
+      "game": "asteroids",
+      "category": "unanswerable",
+      "question": "What is the maximum possible score in Asteroids before the game ends?",
+      "expected_source_ids": [],
+      "retrieved_source_ids": [
+        "asteroids_manual",
+        "missile_command_manual",
+        "asteroids_manual",
+        "asteroids_manual",
+        "asteroids_manual"
+      ],
+      "answer": "I don't know — this information is not available in the provided sources.",
+      "hit": false,
+      "reciprocal_rank": 0.0,
+      "refused": true,
+      "latency_ms": 2467.13,
+      "error": null
+    },
+    {
+      "id": "ast-10",
+      "game": "asteroids",
+      "category": "easy",
+      "question": "How many points is a small asteroid worth in Asteroids?",
+      "expected_source_ids": [
+        "asteroids_manual"
+      ],
+      "retrieved_source_ids": [
+        "asteroids_manual",
+        "asteroids_manual",
+        "asteroids_manual",
+        "space_invaders_manual",
+        "missile_command_manual"
+      ],
+      "answer": "A small asteroid is worth **100 points**【2†L9-L12】【3†L13-L16】",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 11163.02,
+      "error": null
+    },
+    {
+      "id": "pac-01",
+      "game": "pacman",
+      "category": "easy",
+      "question": "How many points is a dot worth in Pac-Man?",
+      "expected_source_ids": [
+        "pacman_manual"
+      ],
+      "retrieved_source_ids": [
+        "pacman_manual",
+        "pacman_manual",
+        "pacman_manual",
+        "pacman_manual",
+        "pacman_manual"
+      ],
+      "answer": "A dot is worth **10 points** in Pac‑Man【1†L9-L11】【2†L1-L2】",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 10755.02,
+      "error": null
+    },
+    {
+      "id": "pac-02",
+      "game": "pacman",
+      "category": "easy",
+      "question": "How many dots are in a Pac-Man level?",
+      "expected_source_ids": [
+        "pacman_manual"
+      ],
+      "retrieved_source_ids": [
+        "pacman_manual",
+        "pacman_manual",
+        "pacman_manual",
+        "pacman_manual",
+        "pacman_manual"
+      ],
+      "answer": "A Pac‑Man level contains **240 dots** [1].",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 10853.99,
+      "error": null
+    },
+    {
+      "id": "pac-03",
+      "game": "pacman",
+      "category": "easy",
+      "question": "What is the bonus fruit on level 1 of Pac-Man and how many points is it worth?",
+      "expected_source_ids": [
+        "pacman_manual"
+      ],
+      "retrieved_source_ids": [
+        "pacman_manual",
+        "pacman_manual",
+        "pacman_manual",
+        "pacman_manual",
+        "pacman_manual"
+      ],
+      "answer": "The bonus fruit on level 1 is the **Cherry**, and it is worth **100 points**[1].",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 11161.12,
+      "error": null
+    },
+    {
+      "id": "pac-04",
+      "game": "pacman",
+      "category": "easy",
+      "question": "What happens to a ghost after Pac-Man eats it?",
+      "expected_source_ids": [
+        "pacman_manual"
+      ],
+      "retrieved_source_ids": [
+        "pacman_manual",
+        "pacman_manual",
+        "pacman_manual",
+        "pacman_manual",
+        "pacman_manual"
+      ],
+      "answer": "When Pac‑Man eats a ghost, the ghost’s eyes fly back to the center box and it regenerates there before re‑entering the maze[1].",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 6451.83,
+      "error": null
+    },
+    {
+      "id": "pac-05",
+      "game": "pacman",
+      "category": "easy",
+      "question": "How long do ghosts stay blue after Pac-Man eats a power pellet?",
+      "expected_source_ids": [
+        "pacman_manual"
+      ],
+      "retrieved_source_ids": [
+        "pacman_manual",
+        "pacman_manual",
+        "pacman_manual",
+        "pacman_manual",
+        "pacman_manual"
+      ],
+      "answer": "Ghosts remain blue and flee for about 6–10 seconds after Pac‑Man eats a power pellet, with the time getting shorter on higher levels[1].",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 10854.2,
+      "error": null
+    },
+    {
+      "id": "pac-06",
+      "game": "pacman",
+      "category": "hard",
+      "question": "How many points do you get for eating the third ghost in a single power-pellet chain in Pac-Man?",
+      "expected_source_ids": [
+        "pacman_manual"
+      ],
+      "retrieved_source_ids": [
+        "pacman_manual",
+        "pacman_manual",
+        "pacman_manual",
+        "pacman_manual",
+        "pacman_manual"
+      ],
+      "answer": "You earn **800 points** for eating the third ghost in a power‑pellet chain[1].",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 11581.2,
+      "error": null
+    },
+    {
+      "id": "pac-07",
+      "game": "pacman",
+      "category": "hard",
+      "question": "Which Pac-Man ghost speeds up when only a few dots remain?",
+      "expected_source_ids": [
+        "pacman_manual"
+      ],
+      "retrieved_source_ids": [
+        "pacman_manual",
+        "pacman_manual",
+        "pacman_manual",
+        "pacman_manual",
+        "pacman_manual"
+      ],
+      "answer": "Blinky, the red “Shadow” ghost, speeds up (entering “Cruise Elroy”) when only a few dots remain [1].",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 6750.65,
+      "error": null
+    },
+    {
+      "id": "pac-08",
+      "game": "pacman",
+      "category": "hard",
+      "question": "How does Inky's behavior differ from Blinky's in Pac-Man?",
+      "expected_source_ids": [
+        "pacman_manual"
+      ],
+      "retrieved_source_ids": [
+        "pacman_manual",
+        "pacman_manual",
+        "pacman_manual",
+        "pacman_manual",
+        "pacman_manual"
+      ],
+      "answer": "Inky (the cyan “Bashful” ghost) does not simply chase Pac‑Man; his target tile is calculated from a combination of Pac‑Man’s position and Blinky’s position, giving him a complex and often unpredictable movement pattern. By contrast, Blinky (the red “Shadow” ghost) always heads straight for Pac‑Man and only changes speed later in the level when few dots remain [1].",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 11573.51,
+      "error": null
+    },
+    {
+      "id": "pac-09",
+      "game": "pacman",
+      "category": "hard",
+      "question": "How many points is the Pac-Man bonus fruit worth on level 7?",
+      "expected_source_ids": [
+        "pacman_manual"
+      ],
+      "retrieved_source_ids": [
+        "pacman_manual",
+        "pacman_manual",
+        "pacman_manual",
+        "pacman_manual",
+        "pacman_manual"
+      ],
+      "answer": "The bonus fruit on level 7 is the **Melon**, worth **1,000 points**[1].",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 11057.07,
+      "error": null
+    },
+    {
+      "id": "pac-10",
+      "game": "pacman",
+      "category": "hard",
+      "question": "What happens to Pac-Man difficulty at level 21 and beyond?",
+      "expected_source_ids": [
+        "pacman_manual"
+      ],
+      "retrieved_source_ids": [
+        "pacman_manual",
+        "pacman_manual",
+        "pacman_manual",
+        "pacman_manual",
+        "pacman_manual"
+      ],
+      "answer": "At level 21 and higher a split‑screen glitch appears, making the game virtually unbeatable [1].",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 11162.71,
+      "error": null
+    },
+    {
+      "id": "pac-11",
+      "game": "pacman",
+      "category": "multi-hop",
+      "question": "If Pac-Man eats all four ghosts after a single power pellet, how many points does he score in total?",
+      "expected_source_ids": [
+        "pacman_manual"
+      ],
+      "retrieved_source_ids": [
+        "pacman_manual",
+        "pacman_manual",
+        "pacman_manual",
+        "pacman_manual",
+        "pacman_manual"
+      ],
+      "answer": "Pac‑Man would earn 50 points for the power pellet plus the points for the four ghosts (200 + 400 + 800 + 1 600 = 3 000).  \nTotal = 50 + 3 000 = 3 050 points. 【1†L7-L13】【2†L9-L12】",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 11470.68,
+      "error": null
+    },
+    {
+      "id": "pac-12",
+      "game": "pacman",
+      "category": "unanswerable",
+      "question": "How many points do you earn for completing a level in Pac-Man?",
+      "expected_source_ids": [],
+      "retrieved_source_ids": [
+        "pacman_manual",
+        "pacman_manual",
+        "pacman_manual",
+        "pacman_manual",
+        "pacman_manual"
+      ],
+      "answer": "I don't know — this information is not available in the provided sources.",
+      "hit": false,
+      "reciprocal_rank": 0.0,
+      "refused": true,
+      "latency_ms": 11160.04,
+      "error": null
+    },
+    {
+      "id": "pac-13",
+      "game": "pacman",
+      "category": "easy",
+      "question": "What is the value of a power pellet in Pac-Man?",
+      "expected_source_ids": [
+        "pacman_manual"
+      ],
+      "retrieved_source_ids": [
+        "pacman_manual",
+        "pacman_manual",
+        "pacman_manual",
+        "pacman_manual",
+        "pacman_manual"
+      ],
+      "answer": "A power pellet is worth **50 points**【2†L9-L11】【3†L5-L7】",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 11263.11,
+      "error": null
+    },
+    {
+      "id": "si-01",
+      "game": "space_invaders",
+      "category": "easy",
+      "question": "How many invaders are in a full Space Invaders formation?",
+      "expected_source_ids": [
+        "space_invaders_manual"
+      ],
+      "retrieved_source_ids": [
+        "space_invaders_manual",
+        "space_invaders_manual",
+        "space_invaders_manual",
+        "space_invaders_manual",
+        "breakout_manual"
+      ],
+      "answer": "A full formation consists of **55 invaders** arranged in 5 rows of 11 [1].",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 2766.33,
+      "error": null
+    },
+    {
+      "id": "si-02",
+      "game": "space_invaders",
+      "category": "easy",
+      "question": "How many points is the top-row squid worth in Space Invaders?",
+      "expected_source_ids": [
+        "space_invaders_manual"
+      ],
+      "retrieved_source_ids": [
+        "space_invaders_manual",
+        "space_invaders_manual",
+        "space_invaders_manual",
+        "space_invaders_manual",
+        "missile_command_manual"
+      ],
+      "answer": "The top‑row squid is worth **30 points** each【1†L9-L12】【3†L9-L12】",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 6671.53,
+      "error": null
+    },
+    {
+      "id": "si-03",
+      "game": "space_invaders",
+      "category": "easy",
+      "question": "How many points is the octopus worth in Space Invaders?",
+      "expected_source_ids": [
+        "space_invaders_manual"
+      ],
+      "retrieved_source_ids": [
+        "space_invaders_manual",
+        "space_invaders_manual",
+        "space_invaders_manual",
+        "missile_command_manual",
+        "missile_command_manual"
+      ],
+      "answer": "The octopus is worth **10 points** each [2][3]",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 11352.51,
+      "error": null
+    },
+    {
+      "id": "si-04",
+      "game": "space_invaders",
+      "category": "easy",
+      "question": "How many bullets can the player have on screen at once in Space Invaders?",
+      "expected_source_ids": [
+        "space_invaders_manual"
+      ],
+      "retrieved_source_ids": [
+        "space_invaders_manual",
+        "space_invaders_manual",
+        "space_invaders_manual",
+        "space_invaders_manual",
+        "centipede_manual"
+      ],
+      "answer": "The player can have **only one bullet** on the screen at a time [1][2].",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 5914.03,
+      "error": null
+    },
+    {
+      "id": "si-05",
+      "game": "space_invaders",
+      "category": "normal",
+      "question": "How many points is the mystery ship (UFO) worth in Space Invaders?",
+      "expected_source_ids": [
+        "space_invaders_manual"
+      ],
+      "retrieved_source_ids": [
+        "space_invaders_manual",
+        "space_invaders_manual",
+        "space_invaders_manual",
+        "space_invaders_manual",
+        "space_invaders_manual"
+      ],
+      "answer": "The mystery ship (UFO) can be worth 50, 100, 150 or 300 points, with the 300‑point value awarded when it’s hit on the 23rd shot after the previous UFO [2][1]",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 11288.45,
+      "error": null
+    },
+    {
+      "id": "si-06",
+      "game": "space_invaders",
+      "category": "hard",
+      "question": "What happens to the invaders as they are destroyed in Space Invaders?",
+      "expected_source_ids": [
+        "space_invaders_manual"
+      ],
+      "retrieved_source_ids": [
+        "space_invaders_manual",
+        "space_invaders_manual",
+        "space_invaders_manual",
+        "space_invaders_manual",
+        "breakout_manual"
+      ],
+      "answer": "As invaders are eliminated, the remaining aliens move faster—their speed increases as more are destroyed【1†L7-L9】【3†L1-L3】",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 3686.54,
+      "error": null
+    },
+    {
+      "id": "si-07",
+      "game": "space_invaders",
+      "category": "hard",
+      "question": "How can you get exactly 300 points from the UFO in Space Invaders?",
+      "expected_source_ids": [
+        "space_invaders_manual"
+      ],
+      "retrieved_source_ids": [
+        "space_invaders_manual",
+        "space_invaders_manual",
+        "space_invaders_manual",
+        "space_invaders_manual",
+        "space_invaders_manual"
+      ],
+      "answer": "To earn the maximum 300‑point UFO bonus, you must time your hit so that it occurs on the **23rd shot fired after the previous UFO appeared** (misses count toward the total). By counting every shot you fire and striking the UFO exactly on that 23rd shot, the game awards the 300‑point value【1†L9-L13】【2†L9-L13】.",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 11468.96,
+      "error": null
+    },
+    {
+      "id": "si-08",
+      "game": "space_invaders",
+      "category": "hard",
+      "question": "What happens when an invader reaches the bottom of the screen in Space Invaders?",
+      "expected_source_ids": [
+        "space_invaders_manual"
+      ],
+      "retrieved_source_ids": [
+        "space_invaders_manual",
+        "space_invaders_manual",
+        "space_invaders_manual",
+        "centipede_manual",
+        "space_invaders_manual"
+      ],
+      "answer": "When an invader reaches the bottom of the screen, the player loses a life (and the game ends once all lives are lost)[1].",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 11064.02,
+      "error": null
+    },
+    {
+      "id": "si-09",
+      "game": "space_invaders",
+      "category": "multi-hop",
+      "question": "What changes when a new wave starts in Space Invaders?",
+      "expected_source_ids": [
+        "space_invaders_manual"
+      ],
+      "retrieved_source_ids": [
+        "space_invaders_manual",
+        "space_invaders_manual",
+        "space_invaders_manual",
+        "space_invaders_manual",
+        "centipede_manual"
+      ],
+      "answer": "When a new wave begins the game resets the alien formation: a fresh set of 55 invaders appears, they start a little lower on the screen, the player’s shields are regenerated, and the overall difficulty (including invader speed) increases for the next wave【1†L13-L18】【4†L1-L4】",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 3071.34,
+      "error": null
+    },
+    {
+      "id": "si-10",
+      "game": "space_invaders",
+      "category": "unanswerable",
+      "question": "How many waves are there in Space Invaders?",
+      "expected_source_ids": [],
+      "retrieved_source_ids": [],
+      "answer": "",
+      "hit": false,
+      "reciprocal_rank": 0.0,
+      "refused": false,
+      "latency_ms": 9523.66,
+      "error": "HTTP 502 from http://localhost:8000/query: {\"detail\":\"LLM provider error: LLM API failed after 4 attempts: Client error '429 Too Many Requests' for url 'https://api.groq.com/openai/v1/chat/completions'\\nFor more information check: https://deve"
+    },
+    {
+      "id": "cen-01",
+      "game": "centipede",
+      "category": "easy",
+      "question": "How many points is a centipede body segment worth in Centipede?",
+      "expected_source_ids": [
+        "centipede_manual"
+      ],
+      "retrieved_source_ids": [
+        "centipede_manual",
+        "centipede_manual",
+        "centipede_manual",
+        "centipede_manual",
+        "centipede_manual"
+      ],
+      "answer": "A centipede body segment is worth **10 points** [1][2]",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 2230.59,
+      "error": null
+    },
+    {
+      "id": "cen-02",
+      "game": "centipede",
+      "category": "easy",
+      "question": "How many points is the centipede head worth in Centipede?",
+      "expected_source_ids": [
+        "centipede_manual"
+      ],
+      "retrieved_source_ids": [
+        "centipede_manual",
+        "centipede_manual",
+        "centipede_manual",
+        "centipede_manual",
+        "centipede_manual"
+      ],
+      "answer": "The centipede head is worth **100 points**[1][2]",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 6679.66,
+      "error": null
+    },
+    {
+      "id": "cen-03",
+      "game": "centipede",
+      "category": "easy",
+      "question": "How many hits does a mushroom take to destroy in Centipede?",
+      "expected_source_ids": [
+        "centipede_manual"
+      ],
+      "retrieved_source_ids": [
+        "centipede_manual",
+        "centipede_manual",
+        "centipede_manual",
+        "centipede_manual",
+        "centipede_manual"
+      ],
+      "answer": "A mushroom requires **four hits** to be destroyed completely[1].",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 10030.87,
+      "error": null
+    },
+    {
+      "id": "cen-04",
+      "game": "centipede",
+      "category": "easy",
+      "question": "How many points do you get for destroying a spider at close range in Centipede?",
+      "expected_source_ids": [
+        "centipede_manual"
+      ],
+      "retrieved_source_ids": [
+        "centipede_manual",
+        "centipede_manual",
+        "centipede_manual",
+        "centipede_manual",
+        "centipede_manual"
+      ],
+      "answer": "You earn **900 points** for destroying a spider at close (near) range【1†L7-L10】【4†L2-L3】",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 10658.44,
+      "error": null
+    },
+    {
+      "id": "cen-05",
+      "game": "centipede",
+      "category": "hard",
+      "question": "What does the flea do in Centipede?",
+      "expected_source_ids": [
+        "centipede_manual"
+      ],
+      "retrieved_source_ids": [
+        "centipede_manual",
+        "centipede_manual",
+        "centipede_manual",
+        "centipede_manual",
+        "centipede_manual"
+      ],
+      "answer": "The flea drops straight down the screen when there are few mushrooms left in the player’s area, leaving a trail of mushrooms behind it. It only appears when the mushroom count is low and must be shot (usually twice) to be destroyed[3].",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 6862.71,
+      "error": null
+    },
+    {
+      "id": "cen-06",
+      "game": "centipede",
+      "category": "hard",
+      "question": "What does the scorpion do to mushrooms in Centipede?",
+      "expected_source_ids": [
+        "centipede_manual"
+      ],
+      "retrieved_source_ids": [
+        "centipede_manual",
+        "centipede_manual",
+        "centipede_manual",
+        "centipede_manual",
+        "centipede_manual"
+      ],
+      "answer": "The scorpion poisons any mushroom it contacts, turning the mushroom purple/red; these poisoned mushrooms then cause the centipede to drop straight down. [1]",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 11164.03,
+      "error": null
+    },
+    {
+      "id": "cen-07",
+      "game": "centipede",
+      "category": "hard",
+      "question": "At what scores do you get extra lives in Centipede?",
+      "expected_source_ids": [
+        "centipede_manual"
+      ],
+      "retrieved_source_ids": [
+        "centipede_manual",
+        "centipede_manual",
+        "centipede_manual",
+        "pacman_manual",
+        "space_invaders_manual"
+      ],
+      "answer": "Extra lives are awarded when you reach 10,000 points and again at 20,000 points【1†L9-L12】【2†L9-L12】",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 5150.11,
+      "error": null
+    },
+    {
+      "id": "cen-08",
+      "game": "centipede",
+      "category": "hard",
+      "question": "What happens when you shoot the centipede in Centipede?",
+      "expected_source_ids": [
+        "centipede_manual"
+      ],
+      "retrieved_source_ids": [
+        "centipede_manual",
+        "centipede_manual",
+        "centipede_manual",
+        "centipede_manual",
+        "centipede_manual"
+      ],
+      "answer": "When a segment of the centipede is hit, that segment is destroyed (worth 10 points) and the centipede splits into two shorter centipedes at the point of impact; destroying the head segment (when the whole centipede is eliminated) awards 100 points[1].",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 10721.69,
+      "error": null
+    },
+    {
+      "id": "cen-09",
+      "game": "centipede",
+      "category": "multi-hop",
+      "question": "In Centipede, which enemy leaves mushrooms behind and which enemy poisons them?",
+      "expected_source_ids": [
+        "centipede_manual"
+      ],
+      "retrieved_source_ids": [
+        "centipede_manual",
+        "centipede_manual",
+        "centipede_manual",
+        "centipede_manual",
+        "centipede_manual"
+      ],
+      "answer": "- The **Flea** enemy drops a trail of mushrooms as it moves down the screen[1].  \n- The **Scorpion** enemy poisons any mushrooms it touches, turning them purple/red[4].",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 10749.72,
+      "error": null
+    },
+    {
+      "id": "cen-10",
+      "game": "centipede",
+      "category": "unanswerable",
+      "question": "How many segments does the spider have in Centipede?",
+      "expected_source_ids": [],
+      "retrieved_source_ids": [
+        "centipede_manual",
+        "centipede_manual",
+        "centipede_manual",
+        "centipede_manual",
+        "centipede_manual"
+      ],
+      "answer": "I don't know — this information is not available in the provided sources.",
+      "hit": false,
+      "reciprocal_rank": 0.0,
+      "refused": true,
+      "latency_ms": 3757.88,
+      "error": null
+    },
+    {
+      "id": "cen-11",
+      "game": "centipede",
+      "category": "easy",
+      "question": "How many segments does the centipede have in Centipede?",
+      "expected_source_ids": [
+        "centipede_manual"
+      ],
+      "retrieved_source_ids": [
+        "centipede_manual",
+        "centipede_manual",
+        "centipede_manual",
+        "centipede_manual",
+        "centipede_manual"
+      ],
+      "answer": "The centipede is composed of **10–12 segments**[1].",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 10581.86,
+      "error": null
+    },
+    {
+      "id": "mc-01",
+      "game": "missile_command",
+      "category": "easy",
+      "question": "How many cities must you defend in Missile Command?",
+      "expected_source_ids": [
+        "missile_command_manual"
+      ],
+      "retrieved_source_ids": [
+        "missile_command_manual",
+        "missile_command_manual",
+        "missile_command_manual",
+        "missile_command_manual",
+        "missile_command_manual"
+      ],
+      "answer": "Six cities must be defended in Missile Command【1†L1-L3】【2†L1-L3】",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 6757.84,
+      "error": null
+    },
+    {
+      "id": "mc-02",
+      "game": "missile_command",
+      "category": "easy",
+      "question": "How many missiles does each battery have at the start of a wave in Missile Command?",
+      "expected_source_ids": [
+        "missile_command_manual"
+      ],
+      "retrieved_source_ids": [
+        "missile_command_manual",
+        "missile_command_manual",
+        "missile_command_manual",
+        "missile_command_manual",
+        "missile_command_manual"
+      ],
+      "answer": "Each battery begins a wave loaded with **10 missiles**【1†L4-L6】【3†L6-L9】",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 6554.46,
+      "error": null
+    },
+    {
+      "id": "mc-03",
+      "game": "missile_command",
+      "category": "easy",
+      "question": "How many points do you get for destroying an enemy missile in Missile Command?",
+      "expected_source_ids": [
+        "missile_command_manual"
+      ],
+      "retrieved_source_ids": [
+        "missile_command_manual",
+        "missile_command_manual",
+        "missile_command_manual",
+        "missile_command_manual",
+        "missile_command_manual"
+      ],
+      "answer": "You earn **25 points** for destroying an enemy missile[1].",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 9929.99,
+      "error": null
+    },
+    {
+      "id": "mc-04",
+      "game": "missile_command",
+      "category": "easy",
+      "question": "What is an unused missile worth at the end of a wave in Missile Command?",
+      "expected_source_ids": [
+        "missile_command_manual"
+      ],
+      "retrieved_source_ids": [
+        "missile_command_manual",
+        "missile_command_manual",
+        "missile_command_manual",
+        "missile_command_manual",
+        "missile_command_manual"
+      ],
+      "answer": "An unused missile is worth **5 points** at the end of a wave[1].",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 11366.94,
+      "error": null
+    },
+    {
+      "id": "mc-05",
+      "game": "missile_command",
+      "category": "hard",
+      "question": "Which waves introduce bombers and satellites in Missile Command?",
+      "expected_source_ids": [
+        "missile_command_manual"
+      ],
+      "retrieved_source_ids": [
+        "missile_command_manual",
+        "missile_command_manual",
+        "missile_command_manual",
+        "missile_command_manual",
+        "missile_command_manual"
+      ],
+      "answer": "Bombers first appear starting with **wave 4**, and satellites are introduced beginning with **wave 6**[1].",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 4404.67,
+      "error": null
+    },
+    {
+      "id": "mc-06",
+      "game": "missile_command",
+      "category": "hard",
+      "question": "What is a surviving city worth at the end of a wave in Missile Command?",
+      "expected_source_ids": [
+        "missile_command_manual"
+      ],
+      "retrieved_source_ids": [
+        "missile_command_manual",
+        "missile_command_manual",
+        "missile_command_manual",
+        "missile_command_manual",
+        "missile_command_manual"
+      ],
+      "answer": "A surviving city is worth **100 points** at the end of a wave【2†source: 72b1470239cf8e4e】【1†source: 20fc8bfbd612731c】",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 6445.72,
+      "error": null
+    },
+    {
+      "id": "mc-07",
+      "game": "missile_command",
+      "category": "hard",
+      "question": "What are the three missile batteries called in Missile Command?",
+      "expected_source_ids": [
+        "missile_command_manual"
+      ],
+      "retrieved_source_ids": [
+        "missile_command_manual",
+        "missile_command_manual",
+        "missile_command_manual",
+        "missile_command_manual",
+        "missile_command_manual"
+      ],
+      "answer": "The three missile batteries are **Alpha** (left), **Delta** (center), and **Omega** (right) [1][2].",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 11678.53,
+      "error": null
+    },
+    {
+      "id": "mc-08",
+      "game": "missile_command",
+      "category": "hard",
+      "question": "At what scores are bonus cities awarded in Missile Command?",
+      "expected_source_ids": [
+        "missile_command_manual"
+      ],
+      "retrieved_source_ids": [
+        "missile_command_manual",
+        "missile_command_manual",
+        "missile_command_manual",
+        "missile_command_manual",
+        "missile_command_manual"
+      ],
+      "answer": "Bonus cities are awarded when you reach 10,000 points, 20,000 points, and 30,000 points [1].",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 6042.05,
+      "error": null
+    },
+    {
+      "id": "mc-09",
+      "game": "missile_command",
+      "category": "multi-hop",
+      "question": "How should you handle a MIRV in Missile Command?",
+      "expected_source_ids": [
+        "missile_command_manual"
+      ],
+      "retrieved_source_ids": [
+        "missile_command_manual",
+        "missile_command_manual",
+        "missile_command_manual",
+        "missile_command_manual",
+        "missile_command_manual"
+      ],
+      "answer": "To deal with a MIRV, try to **destroy the parent missile before it splits**; if it does split, use a **wide‑area explosion** that can catch the multiple warheads at once[1].",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 11673.96,
+      "error": null
+    },
+    {
+      "id": "mc-10",
+      "game": "missile_command",
+      "category": "unanswerable",
+      "question": "How many points is a smart bomb worth in Missile Command?",
+      "expected_source_ids": [],
+      "retrieved_source_ids": [
+        "missile_command_manual",
+        "missile_command_manual",
+        "missile_command_manual",
+        "missile_command_manual",
+        "missile_command_manual"
+      ],
+      "answer": "I don't know — this information is not available in the provided sources.",
+      "hit": false,
+      "reciprocal_rank": 0.0,
+      "refused": true,
+      "latency_ms": 2252.91,
+      "error": null
+    },
+    {
+      "id": "mc-11",
+      "game": "missile_command",
+      "category": "easy",
+      "question": "When are destroyed batteries rebuilt in Missile Command?",
+      "expected_source_ids": [
+        "missile_command_manual"
+      ],
+      "retrieved_source_ids": [
+        "missile_command_manual",
+        "missile_command_manual",
+        "missile_command_manual",
+        "missile_command_manual",
+        "missile_command_manual"
+      ],
+      "answer": "Destroyed batteries are rebuilt between waves [1].",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 10648.73,
+      "error": null
+    },
+    {
+      "id": "bo-01",
+      "game": "breakout",
+      "category": "easy",
+      "question": "How many points is a yellow brick worth in Breakout?",
+      "expected_source_ids": [
+        "breakout_manual"
+      ],
+      "retrieved_source_ids": [
+        "breakout_manual",
+        "breakout_manual",
+        "breakout_manual",
+        "breakout_manual",
+        "centipede_manual"
+      ],
+      "answer": "A yellow brick is worth **7 points** in Breakout [1][3].",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 7886.46,
+      "error": null
+    },
+    {
+      "id": "bo-02",
+      "game": "breakout",
+      "category": "easy",
+      "question": "How many rows of bricks are in Breakout?",
+      "expected_source_ids": [
+        "breakout_manual"
+      ],
+      "retrieved_source_ids": [
+        "breakout_manual",
+        "breakout_manual",
+        "breakout_manual",
+        "breakout_manual",
+        "breakout_manual"
+      ],
+      "answer": "Breakout features eight rows of bricks [1].",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 6450.16,
+      "error": null
+    },
+    {
+      "id": "bo-03",
+      "game": "breakout",
+      "category": "easy",
+      "question": "How many points is a red brick worth in Breakout?",
+      "expected_source_ids": [
+        "breakout_manual"
+      ],
+      "retrieved_source_ids": [
+        "breakout_manual",
+        "breakout_manual",
+        "breakout_manual",
+        "centipede_manual",
+        "breakout_manual"
+      ],
+      "answer": "A red brick is worth **1 point**【1†L13-L16】【2†L1-L4】",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 6758.13,
+      "error": null
+    },
+    {
+      "id": "bo-04",
+      "game": "breakout",
+      "category": "hard",
+      "question": "What determines the ball's deflection angle in Breakout?",
+      "expected_source_ids": [
+        "breakout_manual"
+      ],
+      "retrieved_source_ids": [
+        "breakout_manual",
+        "breakout_manual",
+        "breakout_manual",
+        "breakout_manual",
+        "breakout_manual"
+      ],
+      "answer": "The ball’s deflection angle is set by where it strikes the paddle – hitting near the center produces a shallow angle, while hitting near the edges creates a steep angle【1†L13-L16】【4†L1-L4】",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 10446.52,
+      "error": null
+    },
+    {
+      "id": "bo-05",
+      "game": "breakout",
+      "category": "hard",
+      "question": "What happens to the ball speed when it breaks through to the top of the wall in Breakout?",
+      "expected_source_ids": [
+        "breakout_manual"
+      ],
+      "retrieved_source_ids": [
+        "breakout_manual",
+        "breakout_manual",
+        "breakout_manual",
+        "breakout_manual",
+        "breakout_manual"
+      ],
+      "answer": "When the ball breaks through to the top of the wall, its speed increases dramatically—it speeds up significantly. [2]",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 5938.4,
+      "error": null
+    },
+    {
+      "id": "bo-06",
+      "game": "breakout",
+      "category": "hard",
+      "question": "What is the tunnel strategy in Breakout?",
+      "expected_source_ids": [
+        "breakout_manual"
+      ],
+      "retrieved_source_ids": [
+        "breakout_manual",
+        "breakout_manual",
+        "breakout_manual",
+        "breakout_manual",
+        "pacman_manual"
+      ],
+      "answer": "The tunnel strategy is to **break a vertical “tunnel” through the brick wall** so the ball can bounce repeatedly in the cleared space above, rapidly destroying many bricks. This can be very effective but makes the ball hard to control when it comes back down, so players must develop a timing rhythm and position the paddle (often off‑center) to manage the ball’s return angle and keep control【3†L1-L5】【4†L1-L4】【1†L4-L6】.",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 12393.59,
+      "error": null
+    },
+    {
+      "id": "bo-07",
+      "game": "breakout",
+      "category": "hard",
+      "question": "Does the paddle change size in Breakout?",
+      "expected_source_ids": [
+        "breakout_manual"
+      ],
+      "retrieved_source_ids": [
+        "breakout_manual",
+        "breakout_manual",
+        "breakout_manual",
+        "breakout_manual",
+        "breakout_manual"
+      ],
+      "answer": "No. The paddle remains the same size throughout the game[4].",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 6036.76,
+      "error": null
+    },
+    {
+      "id": "bo-08",
+      "game": "breakout",
+      "category": "multi-hop",
+      "question": "In Breakout, which is worth more: a green brick or an orange brick, and by how much?",
+      "expected_source_ids": [
+        "breakout_manual"
+      ],
+      "retrieved_source_ids": [
+        "breakout_manual",
+        "breakout_manual",
+        "breakout_manual",
+        "breakout_manual",
+        "breakout_manual"
+      ],
+      "answer": "A green brick is worth more—it scores 5 points, while an orange brick scores 3 points, so a green brick is worth **2 points more** than an orange brick【1†L9-L12】【3†L13-L16】.",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 11370.69,
+      "error": null
+    },
+    {
+      "id": "bo-09",
+      "game": "breakout",
+      "category": "unanswerable",
+      "question": "How many points do you score when the ball hits the ceiling in Breakout?",
+      "expected_source_ids": [],
+      "retrieved_source_ids": [
+        "breakout_manual",
+        "breakout_manual",
+        "centipede_manual",
+        "centipede_manual",
+        "breakout_manual"
+      ],
+      "answer": "I don't know — this information is not available in the provided sources.",
+      "hit": false,
+      "reciprocal_rank": 0.0,
+      "refused": true,
+      "latency_ms": 6143.34,
+      "error": null
+    },
+    {
+      "id": "bo-10",
+      "game": "breakout",
+      "category": "easy",
+      "question": "How many balls (lives) does Breakout start with?",
+      "expected_source_ids": [
+        "breakout_manual"
+      ],
+      "retrieved_source_ids": [
+        "breakout_manual",
+        "breakout_manual",
+        "breakout_manual",
+        "centipede_manual",
+        "asteroids_manual"
+      ],
+      "answer": "Breakout begins with **3 – 5 balls (lives)**, the exact number varying according to the selected game settings[2].",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 11366.41,
+      "error": null
+    },
+    {
+      "id": "x-doc-01",
+      "game": "multi",
+      "category": "multi-hop",
+      "question": "Which Atari game manuals in this knowledge base award an extra life or ship at 10,000 points?",
+      "expected_source_ids": [
+        "asteroids_manual",
+        "centipede_manual"
+      ],
+      "retrieved_source_ids": [
+        "asteroids_manual",
+        "asteroids_manual",
+        "pacman_manual",
+        "space_invaders_manual",
+        "centipede_manual"
+      ],
+      "answer": "- **Asteroids** – the manual notes an extra ship is awarded at 10,000 points[1].  \n- **Centipede** – the manual states an extra life is typically granted at 10,000 points[5].",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 7071.65,
+      "error": null
+    },
+    {
+      "id": "x-doc-02",
+      "game": "multi",
+      "category": "multi-hop",
+      "question": "Which game's manual describes UFOs worth 50-300 points?",
+      "expected_source_ids": [
+        "space_invaders_manual"
+      ],
+      "retrieved_source_ids": [
+        "space_invaders_manual",
+        "space_invaders_manual",
+        "space_invaders_manual",
+        "pacman_manual",
+        "pacman_manual"
+      ],
+      "answer": "Space Invaders – its manual notes that the Mystery Ship (UFO) is worth 50–300 points[1].",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 11668.9,
+      "error": null
+    },
+    {
+      "id": "x-doc-03",
+      "game": "multi",
+      "category": "multi-hop",
+      "question": "Which two games in this knowledge base feature flying saucers or UFOs as enemies?",
+      "expected_source_ids": [
+        "asteroids_manual",
+        "space_invaders_manual"
+      ],
+      "retrieved_source_ids": [
+        "asteroids_manual",
+        "asteroids_manual",
+        "space_invaders_manual",
+        "space_invaders_manual",
+        "space_invaders_manual"
+      ],
+      "answer": "The games are **Asteroids** (which includes flying saucers as enemies) [2] and **Space Invaders** (which features a UFO/Mystery Ship enemy) [4].",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 6040.46,
+      "error": null
+    },
+    {
+      "id": "x-doc-04",
+      "game": "multi",
+      "category": "unanswerable",
+      "question": "Which game in this knowledge base was designed by Shigeru Miyamoto?",
+      "expected_source_ids": [],
+      "retrieved_source_ids": [
+        "pacman_manual",
+        "space_invaders_manual",
+        "breakout_manual",
+        "asteroids_manual",
+        "breakout_manual"
+      ],
+      "answer": "I don't know — this information is not available in the provided sources.",
+      "hit": false,
+      "reciprocal_rank": 0.0,
+      "refused": true,
+      "latency_ms": 11332.47,
+      "error": null
+    },
+    {
+      "id": "x-doc-05",
+      "game": "multi",
+      "category": "multi-hop",
+      "question": "In which games do bonus points depend on the distance of the destroyed enemy?",
+      "expected_source_ids": [
+        "centipede_manual"
+      ],
+      "retrieved_source_ids": [
+        "centipede_manual",
+        "missile_command_manual",
+        "missile_command_manual",
+        "centipede_manual",
+        "missile_command_manual"
+      ],
+      "answer": "The classic arcade game **Centipede** awards bonus points that vary with the distance at which the player destroys the Spider enemy (e.g., 900 points when close, 600 points at medium range, and 300 points when far)【1†L5-L9】【4†L9-L13】.",
+      "hit": true,
+      "reciprocal_rank": 1.0,
+      "refused": false,
+      "latency_ms": 4136.25,
+      "error": null
+    }
+  ]
+}
