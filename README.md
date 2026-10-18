@@ -7,6 +7,13 @@
 
 ---
 
+> **🔗 Live demo (temporary):** **https://frankfurt-irrigation-nano-uni.trycloudflare.com** — the
+> zero-budget deployment behind this URL runs the production stack on a home PC and is
+> published through a free, account-less [Cloudflare Quick Tunnel](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/).
+> The URL changes whenever the tunnel restarts and the demo is offline while the host
+> machine is off — see [Zero-budget public demo](#zero-budget-public-demo) for setup, limits
+> and known constraints.
+
 ## 🚀 Features
 
 - **Accurate retrieval:** Hybrid search (vector + BM25) with cross-encoder re-ranking
@@ -375,10 +382,38 @@ See [`docs/deployment.md`](./docs/deployment.md) for the full AWS walkthrough
 (ECR, security group, SSM secrets, ingestion, renewals, rollback).
 
 > **Status:** the production stack, scripts, docs and CD workflow are complete
-> and validated locally; the public demo URL is **pending an AWS account +
-> credentials + domain**. Merging to `main` deploys automatically through
+> and validated locally; an AWS-hosted URL is still **pending an AWS account +
+> credentials + domain**. A zero-budget demo is live instead — see
+> [Zero-budget public demo](#zero-budget-public-demo). Merging to `main` deploys
+> automatically through
 > [`.github/workflows/deploy.yml`](./.github/workflows/deploy.yml) — it skips
 > with a notice until the repository secrets in the deployment guide are set.
+
+### Zero-budget public demo
+
+The live demo runs the same production stack on one Windows PC and publishes only
+edge Nginx through a free Cloudflare Quick Tunnel (no account, no card, no cloud
+resources):
+
+```powershell
+# 1. Start the production stack (images are tagged with the deployed git SHA)
+docker compose --env-file .env.production -f docker-compose.prod.yml up -d --build
+
+# 2. Seed the vector database (once; idempotent)
+docker compose --env-file .env.production -f docker-compose.prod.yml exec ai-service python -m scripts.ingest /data/raw
+
+# 3. Publish port 80 and print the temporary public URL
+%LOCALAPPDATA%\cloudflared\run-tunnel.ps1
+```
+
+The host's `.env.production` (gitignored) holds the Groq key, the public demo
+API key and the database passwords; nothing is committed. Constraints: the
+Quick Tunnel hostname rotates on every restart; the demo is offline while the
+host sleeps or reboots (Docker Desktop restarts the stack, the tunnel must be
+restarted with `run-tunnel.ps1`); answers come from the Groq free tier behind a
+conservative shared 10 requests/minute limit; Qdrant, Redis and MongoDB stay
+internal — only edge Nginx is reachable, and the frontend bundle carries the
+public demo API key by design.
 
 ### Environment Variables (Production)
 
@@ -594,7 +629,20 @@ See [GitHub Issues](https://github.com/Mehtab404/RetroGPT/issues) for detailed t
 
 ## 🐛 Known Issues
 
-_None yet — this section will be updated as issues are discovered._
+- **Groq citation markers with line refs render as plain text.** The model emits
+  markers like `【2†L5-L7】` (line refs inside the brackets). The normalizers in
+  `ai-service/app/generation/citations.py` and `frontend/src/citations.ts` only
+  match number-only markers (`【N】`/`[N]`), so these stay unclickable text instead
+  of becoming source links. Fix pending review (strip the `†…` suffix during
+  normalization).
+- **The frontend container reports `unhealthy`.** Its image healthcheck probes
+  `http://localhost/`, which resolves to IPv6 inside `nginx:alpine` while nginx
+  listens on IPv4; the container serves traffic correctly (verified through the
+  tunnel). Fix pending review (`127.0.0.1`).
+- **Rate limiting is effectively shared through the tunnel.** With `trust proxy: 1`
+  the gateway keys its limiter on Nginx's proxy address instead of the visitor IP,
+  so all demo traffic shares one bucket (still a working safety valve for the Groq
+  free tier). Fix pending review (`trust proxy: 2`).
 
 ---
 
